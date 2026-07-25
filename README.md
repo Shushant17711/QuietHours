@@ -2,7 +2,7 @@
 
 **QuietHours** is an intelligent Android application built with Jetpack Compose that automates your device's ringer mode and media volume based on your weekly schedules. 
 
-No more embarrassing ringing during meetings or missing important calls because you forgot to unmute your phone! Set your timetable once (or scan it using our built-in OCR feature), and let QuietHours handle the rest.
+No more embarrassing phone rings during a quiet lecture, or missing important calls because you forgot to unmute your phone after class! Designed perfectly for college students—just snap a picture of your class timetable, and QuietHours will automatically mute your phone during classes and restore the volume when you're done.
 
 ---
 
