@@ -1,0 +1,29 @@
+*.iml
+.gradle
+/local.properties
+/.idea/caches
+/.idea/libraries
+/.idea/modules.xml
+/.idea/workspace.xml
+/.idea/navEditor.xml
+/.idea/assetWizardSettings.xml
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+
+# Android Studio Navigation editor temp files
+.navigation/
+
+# Android Studio CMake generated files
+CMakeLists.txt.user
+
+# App-specific build output
+/app/build/
+
+# JDK or custom binary downloads specific to this workspace
+/jdk-17/
+/gradle-bin/
+/build_output*.txt
