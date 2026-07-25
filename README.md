@@ -45,7 +45,7 @@ To build and run this project locally:
 
 | Home | Add Schedule | AI Import |
 | :---: | :---: | :---: |
-| <img src="https://via.placeholder.com/250x500.png?text=Home+Screen" width="200" /> | <img src="https://via.placeholder.com/250x500.png?text=Add+Schedule" width="200" /> | <img src="https://via.placeholder.com/250x500.png?text=AI+Import" width="200" /> |
+| <img src="images/home.png" width="200" alt="Home Screen" /> | <img src="images/add.png" width="200" alt="Add Schedule" /> | <img src="images/import.png" width="200" alt="AI Import" /> |
 
 *(Note: Add your actual app screenshots to the repository and update these paths!)*
 
