@@ -10,7 +10,7 @@ No more embarrassing phone rings during a quiet lecture, or missing important ca
 
 - **🕒 Automated Volume Control**: Automatically mutes your phone when an event starts, and restores the previous volume when it ends.
 - **📅 Weekly Schedules & Timetables**: Organize your routines by day of the week.
-- **📸 Smart OCR Import**: Snap a photo or upload an image of your schedule/timetable. QuietHours uses ML Kit to parse the image and automatically import your events!
+- **🤖 AI-Powered Import**: Snap a photo or upload an image of your class timetable. QuietHours sends it directly to our AI which instantly parses and sets up all your schedules for you!
 - **🎨 Material You Design**: A beautiful, modern, and intuitive user interface built entirely with Jetpack Compose, following Material 3 design guidelines.
 - **🔋 Battery Efficient**: Uses Android's modern `WorkManager` and `AlarmManager` for precise scheduling without draining your battery in the background.
 
@@ -20,14 +20,14 @@ No more embarrassing phone rings during a quiet lecture, or missing important ca
 - **UI Framework:** [Jetpack Compose](https://developer.android.com/jetpack/compose)
 - **Local Storage:** [Room Database](https://developer.android.com/training/data-storage/room)
 - **Background Work:** [WorkManager](https://developer.android.com/topic/libraries/architecture/workmanager) & `AlarmManager`
-- **Machine Learning:** [Google ML Kit](https://developers.google.com/ml-kit) (Text Recognition / OCR)
+- **Artificial Intelligence:** Advanced AI Vision for smart timetable parsing
 
 ## 📱 Permissions Explained
 
 QuietHours requires the following permissions to function correctly:
 - `Do Not Disturb Access (ACCESS_NOTIFICATION_POLICY)` & `MODIFY_AUDIO_SETTINGS`: To change your phone's ringer and media volumes.
 - `Alarms & Reminders (SCHEDULE_EXACT_ALARM)`: To ensure your schedules trigger at the exact right minute.
-- `Camera` & `Storage`: Used exclusively for the OCR timetable scanning feature (importing schedules from images).
+- `Camera` & `Storage`: Used exclusively for capturing or uploading your timetable images for AI processing.
 
 ## 🚀 Getting Started
 
@@ -43,9 +43,9 @@ To build and run this project locally:
 
 ## 📸 Screenshots
 
-| Home | Add Schedule | OCR Scanner |
+| Home | Add Schedule | AI Import |
 | :---: | :---: | :---: |
-| <img src="https://via.placeholder.com/250x500.png?text=Home+Screen" width="200" /> | <img src="https://via.placeholder.com/250x500.png?text=Add+Schedule" width="200" /> | <img src="https://via.placeholder.com/250x500.png?text=OCR+Import" width="200" /> |
+| <img src="https://via.placeholder.com/250x500.png?text=Home+Screen" width="200" /> | <img src="https://via.placeholder.com/250x500.png?text=Add+Schedule" width="200" /> | <img src="https://via.placeholder.com/250x500.png?text=AI+Import" width="200" /> |
 
 *(Note: Add your actual app screenshots to the repository and update these paths!)*
 
