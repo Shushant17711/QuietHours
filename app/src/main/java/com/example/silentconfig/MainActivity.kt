@@ -18,11 +18,24 @@ import com.example.aquiethours.worker.ScheduleEnforcerWorker
 import com.example.aquiethours.receiver.MainService
 import java.util.concurrent.TimeUnit
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalUriHandler
+import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.example.aquiethours.data.AppPreferences
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
@@ -38,10 +51,14 @@ import com.example.aquiethours.ui.theme.AQuietHoursTheme
 class MainActivity : ComponentActivity() {
 
 
+    private var hasRequestedExactAlarm = false
+    private var hasRequestedBatteryOpt = false
+    private var hasRequestedDnd = false
+    private var hasRequestedNotifications = false
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        requestPermissionsIfNeeded()
         
         // Start the persistent foreground service to keep the app alive
         val serviceIntent = Intent(this, MainService::class.java)
@@ -60,21 +77,46 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
+                    var showTermsDialog by remember { 
+                        mutableStateOf(!AppPreferences.getInstance(this@MainActivity).hasAcceptedTerms()) 
+                    }
+
+                    if (showTermsDialog) {
+                        TermsAndConditionsDialog(
+                            onAccept = {
+                                AppPreferences.getInstance(this@MainActivity).setTermsAccepted(true)
+                                showTermsDialog = false
+                            },
+                            onDecline = {
+                                finishAffinity() // Close the app if they decline
+                            }
+                        )
+                    }
+
                     AppNavigation()
                 }
             }
         }
     }
 
-    private fun requestPermissionsIfNeeded() {
+    override fun onResume() {
+        super.onResume()
+        checkAndRequestNextPermission()
+    }
+
+    private fun checkAndRequestNextPermission() {
         // Request exact alarm permission
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             val silentManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
             if (!silentManager.canScheduleExactAlarms()) {
-                val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
-                    data = Uri.parse("package:$packageName")
+                if (!hasRequestedExactAlarm) {
+                    hasRequestedExactAlarm = true
+                    val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                    return
                 }
-                startActivity(intent)
             }
         }
 
@@ -82,17 +124,25 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val powerManager = getSystemService(Context.POWER_SERVICE) as android.os.PowerManager
             if (!powerManager.isIgnoringBatteryOptimizations(packageName)) {
-                val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                    data = Uri.parse("package:$packageName")
+                if (!hasRequestedBatteryOpt) {
+                    hasRequestedBatteryOpt = true
+                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                        data = Uri.parse("package:$packageName")
+                    }
+                    startActivity(intent)
+                    return
                 }
-                startActivity(intent)
             }
         }
         
         // Request Notification permission (Required for Foreground Services on Android 13+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
+                if (!hasRequestedNotifications) {
+                    hasRequestedNotifications = true
+                    requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 101)
+                    return
+                }
             }
         }
         
@@ -100,9 +150,22 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             val notificationManager = getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
             if (!notificationManager.isNotificationPolicyAccessGranted) {
-                val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
-                startActivity(intent)
+                if (!hasRequestedDnd) {
+                    hasRequestedDnd = true
+                    val intent = Intent(Settings.ACTION_NOTIFICATION_POLICY_ACCESS_SETTINGS)
+                    startActivity(intent)
+                    return
+                }
             }
+        }
+    }
+
+    @Deprecated("Deprecated in Java")
+    override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+        // When notification permission dialog is dismissed, check the next permission
+        if (requestCode == 101) {
+            checkAndRequestNextPermission()
         }
     }
 }
@@ -159,4 +222,38 @@ fun AppNavigation() {
             )
         }
     }
+}
+
+@Composable
+fun TermsAndConditionsDialog(onAccept: () -> Unit, onDecline: () -> Unit) {
+    val uriHandler = LocalUriHandler.current
+
+    AlertDialog(
+        onDismissRequest = { /* Prevent dismissing by clicking outside */ },
+        title = { Text("Terms & Privacy Policy") },
+        text = {
+            Column {
+                Text("Please accept our Terms and Conditions and Privacy Policy to continue using the app.")
+                
+                Spacer(modifier = Modifier.height(8.dp))
+                
+                TextButton(onClick = { uriHandler.openUri("https://google.com") /* TODO: Replace with your actual Terms URL */ }) {
+                    Text("Read Terms and Conditions")
+                }
+                TextButton(onClick = { uriHandler.openUri("https://google.com") /* TODO: Replace with your actual Privacy Policy URL */ }) {
+                    Text("Read Privacy Policy")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onAccept) {
+                Text("Accept")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDecline) {
+                Text("Decline")
+            }
+        }
+    )
 }
