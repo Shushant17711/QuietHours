@@ -11,7 +11,7 @@ class SettingsManager(context: Context) {
     companion object {
         private const val KEY_API_KEY = "openrouter_api_key"
         private const val KEY_MODEL = "openrouter_model"
-        private const val DEFAULT_MODEL = "google/gemini-2.0-flash-001"
+        private const val DEFAULT_MODEL = "google/gemini-2.5-flash"
     }
 
     fun getApiKey(): String {

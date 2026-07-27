@@ -46,8 +46,8 @@ fun SettingsScreen(
     var showModelDropdown by remember { mutableStateOf(false) }
 
     val availableModels = listOf(
-        "google/gemini-2.0-flash-001" to "Gemini 2.0 Flash",
         "google/gemini-2.5-flash" to "Gemini 2.5 Flash",
+        "google/gemini-2.0-flash-001" to "Gemini 2.0 Flash",
         "openai/gpt-4o-mini" to "GPT-4o Mini",
         "anthropic/claude-3.5-sonnet" to "Claude 3.5 Sonnet",
         "meta-llama/llama-3.1-70b-instruct" to "Llama 3.1 70B"
