@@ -14,6 +14,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Favorite
 import com.example.aquiethours.ui.icons.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -401,7 +402,7 @@ fun SettingsScreen(
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryDark)
             ) {
-                Icon(Icons.Outlined.Favorite, contentDescription = null, modifier = Modifier.size(18.dp))
+                Icon(Icons.Filled.Favorite, contentDescription = null, modifier = Modifier.size(18.dp))
                 Spacer(modifier = Modifier.width(8.dp))
                 Text("Support via UPI", fontWeight = FontWeight.Bold)
             }
