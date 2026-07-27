@@ -360,6 +360,8 @@ private fun SelectFileContent(
     onPickPdf: () -> Unit,
     onNavigateBack: () -> Unit
 ) {
+    var showManualInstructionsDialog by remember { mutableStateOf(false) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -471,13 +473,44 @@ private fun SelectFileContent(
         
         OutlinedButton(
             onClick = {
-                clipboardManager.setText(AnnotatedString(promptText))
-                Toast.makeText(context, "AI Prompt copied to clipboard!", Toast.LENGTH_SHORT).show()
+                showManualInstructionsDialog = true
             },
             modifier = Modifier.fillMaxWidth().height(56.dp),
             shape = RoundedCornerShape(16.dp)
         ) {
-            Text("Don't have an API key? Copy AI Prompt")
+            Text("Don't have an API key? Learn how to use")
+        }
+
+        if (showManualInstructionsDialog) {
+            AlertDialog(
+                onDismissRequest = { showManualInstructionsDialog = false },
+                title = { Text("Manual AI Parsing") },
+                text = {
+                    Column {
+                        Text("You can still use QuietHours without an API key by using a free AI like ChatGPT or Gemini:")
+                        Spacer(modifier = Modifier.height(12.dp))
+                        Text("1. Click the button below to copy the AI prompt.")
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("2. Send your timetable image and the copied prompt to any AI chatbot.")
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Text("3. Copy the exact text the AI generates and enter it manually into the app.")
+                    }
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        clipboardManager.setText(AnnotatedString(promptText))
+                        Toast.makeText(context, "AI Prompt copied to clipboard!", Toast.LENGTH_SHORT).show()
+                        showManualInstructionsDialog = false
+                    }) {
+                        Text("Copy Prompt")
+                    }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showManualInstructionsDialog = false }) {
+                        Text("Close")
+                    }
+                }
+            )
         }
 
         Spacer(modifier = Modifier.height(12.dp))
