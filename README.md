@@ -45,9 +45,8 @@ To build and run this project locally:
 
 | Home | Add Schedule | AI Import |
 | :---: | :---: | :---: |
-| <img src="images/home.png" width="200" alt="Home Screen" /> | <img src="images/add.png" width="200" alt="Add Schedule" /> | <img src="images/import.png" width="200" alt="AI Import" /> |
+| <img src="images/home.jpeg" width="200" alt="Home Screen" /> | <img src="images/add.jpeg" width="200" alt="Add Schedule" /> | <img src="images/import.jpeg" width="200" alt="AI Import" /> |
 
-*(Note: Add your actual app screenshots to the repository and update these paths!)*
 
 ## 🤝 Contributing
 
