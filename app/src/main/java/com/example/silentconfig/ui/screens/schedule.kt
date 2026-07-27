@@ -1,5 +1,8 @@
 package com.example.aquiethours.ui.screens
-
+import android.content.ActivityNotFoundException
+import android.content.Intent
+import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -365,6 +368,43 @@ fun SettingsScreen(
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            
+            Spacer(modifier = Modifier.height(24.dp))
+            
+            HorizontalDivider(color = OutlineVariantDark)
+            Spacer(modifier = Modifier.height(16.dp))
+            
+            Text(
+                "Support Developer",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                "If this app saved you from an embarrassing ringtone during class, consider supporting development!",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+            
+            Button(
+                onClick = {
+                    val upiUri = Uri.parse("upi://pay?pa=6239876635@ptyes&pn=QuietHours%20Developer&cu=INR")
+                    val intent = Intent(Intent.ACTION_VIEW, upiUri)
+                    try {
+                        context.startActivity(intent)
+                    } catch (e: ActivityNotFoundException) {
+                        Toast.makeText(context, "No UPI app found on your phone!", Toast.LENGTH_SHORT).show()
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().height(50.dp),
+                shape = RoundedCornerShape(12.dp),
+                colors = ButtonDefaults.buttonColors(containerColor = PrimaryDark)
+            ) {
+                Icon(Icons.Outlined.Favorite, contentDescription = null, modifier = Modifier.size(18.dp))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text("Support via UPI", fontWeight = FontWeight.Bold)
+            }
 
             Spacer(modifier = Modifier.height(24.dp))
         }
