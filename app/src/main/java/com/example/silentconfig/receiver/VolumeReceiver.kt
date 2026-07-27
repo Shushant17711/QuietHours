@@ -422,7 +422,15 @@ class VolumeReceiver : BroadcastReceiver() {
                         }
                     }
 
-                    prefs.edit().putBoolean(KEY_HAS_SAVED_STATE, false).commit()
+                    prefs.edit()
+                        .putBoolean(KEY_HAS_SAVED_STATE, false)
+                        .remove("saved_dnd_filter")
+                        .remove(KEY_SAVED_RINGER_MODE)
+                        .remove(KEY_SAVED_RING_VOLUME)
+                        .remove(KEY_SAVED_MEDIA_VOLUME)
+                        .remove(KEY_SAVED_ALARM_VOLUME)
+                        .remove("saved_notification_volume")
+                        .commit()
 
                     Log.d(TAG, "Restored volumes: ring=$savedRing, media=$savedMedia, alarm=$savedAlarm, ringerMode=$savedRingerMode")
                 } else {

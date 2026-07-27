@@ -239,14 +239,15 @@ class MainService : Service() {
         } else {
             if (wasEnforcing) {
                 Log.d(TAG, "[$source] No active schedules. Restoring volumes.")
-                wasEnforcing = false
-                lastEnforcedProfileId = -1
-                saveEnforcementState()
                 
                 unregisterObservers()
                 
                 delay(1500)
                 VolumeReceiver.restoreSavedVolumes(applicationContext, audioManager)
+                
+                wasEnforcing = false
+                lastEnforcedProfileId = -1
+                saveEnforcementState()
             }
         }
     }
