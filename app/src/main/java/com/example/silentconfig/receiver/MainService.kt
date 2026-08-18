@@ -37,6 +37,8 @@ class MainService : Service() {
     private var wasEnforcing = false
     private var lastEnforcedProfileId = -1
     private var checkerJob: Job? = null
+    private var enforcerJob: Job? = null
+    @Volatile private var cachedProfile: Profile? = null
     private var screenReceiver: android.content.BroadcastReceiver? = null
 
     private val applyMutex = Mutex()
@@ -78,14 +80,20 @@ class MainService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // MUST call startForeground() unconditionally: this service is always launched via
+        // startForegroundService(), and skipping this call crashes the process with
+        // ForegroundServiceDidNotStartInTimeException, which was silently killing the
+        // background schedule checker.
+        startForeground(NOTIFICATION_ID, createNotification())
+
         val isEnabled = AppPreferences.getInstance(applicationContext).isGlobalEnabled()
         if (!isEnabled) {
             Log.d(TAG, "App is globally disabled, stopping MainService")
+            stopForeground(STOP_FOREGROUND_REMOVE)
             stopSelf()
             return START_NOT_STICKY
         }
 
-        startForeground(NOTIFICATION_ID, createNotification())
         Log.d(TAG, "MainService started and running in foreground.")
 
         loadEnforcementState()
@@ -95,6 +103,7 @@ class MainService : Service() {
         }
 
         startScheduleChecker()
+        startEnforcementLoop()
 
         if (intent?.action == ACTION_EVALUATE_SCHEDULES) {
             serviceScope.launch {
@@ -113,6 +122,7 @@ class MainService : Service() {
         super.onDestroy()
         serviceJob.cancel()
         checkerJob?.cancel()
+        enforcerJob?.cancel()
         screenReceiver?.let { unregisterReceiver(it) }
         unregisterObservers()
         
@@ -135,15 +145,22 @@ class MainService : Service() {
 
         volumeChangeReceiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                if (intent?.action == "android.media.VOLUME_CHANGED_ACTION" || intent?.action == AudioManager.RINGER_MODE_CHANGED_ACTION) {
+                // React to every action we registered for — enumerating a subset here silently
+                // dropped the mute-changed broadcasts the filter was asking for.
+                if (intent?.action != null) {
                     serviceScope.launch {
-                        enforceProfileNow("Broadcast")
+                        enforceProfileNow("Broadcast:${intent.action}")
                     }
                 }
             }
         }
         val filter = IntentFilter("android.media.VOLUME_CHANGED_ACTION")
         filter.addAction(AudioManager.RINGER_MODE_CHANGED_ACTION)
+        // Volume-key changes inside another app (Instagram etc.) mute/unmute the stream rather
+        // than writing Settings.System, so the ContentObserver never sees them. Without this
+        // action those changes were only caught by the slow periodic sweep.
+        filter.addAction("android.media.STREAM_MUTE_CHANGED_ACTION")
+        filter.addAction("android.media.INTERNAL_RINGER_MODE_CHANGED_ACTION")
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             registerReceiver(volumeChangeReceiver, filter, Context.RECEIVER_EXPORTED)
         } else {
@@ -193,6 +210,7 @@ class MainService : Service() {
     private val stateMutex = Mutex()
     
     private suspend fun updateEnforcementState(source: String) = stateMutex.withLock {
+        cachedProfile = null // re-read once per cycle so profile edits take effect
         val database = AppDatabase.getDatabase(applicationContext)
         val activeSchedules = database.scheduleDao().getActiveSchedules()
         val now = Calendar.getInstance()
@@ -234,6 +252,10 @@ class MainService : Service() {
                 registerObservers()
                 enforceProfileNow("NewSchedule")
             } else {
+                // Idempotent, but guarantees we still have listeners if they were ever lost
+                // (process restart, observer torn down) — otherwise enforcement silently
+                // degrades to the periodic sweep only.
+                registerObservers()
                 enforceProfileNow("ReVerify")
             }
         } else {
@@ -242,12 +264,35 @@ class MainService : Service() {
                 
                 unregisterObservers()
                 
-                delay(1500)
                 VolumeReceiver.restoreSavedVolumes(applicationContext, audioManager)
                 
                 wasEnforcing = false
                 lastEnforcedProfileId = -1
                 saveEnforcementState()
+            }
+        }
+    }
+
+    /**
+     * Tight enforcement poll. Broadcasts are the fast path, but volume-key changes made inside
+     * another app don't reliably reach a background receiver on every ROM — this loop needs no
+     * broadcast at all. The check itself is just AudioManager getters against a cached profile,
+     * so it stays cheap; the expensive re-apply only runs when an actual deviation is found.
+     */
+    private fun startEnforcementLoop() {
+        enforcerJob?.cancel()
+        enforcerJob = serviceScope.launch {
+            while (isActive) {
+                if (wasEnforcing) {
+                    try {
+                        enforceProfileNow("FastPoll")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Error in enforcement loop", e)
+                    }
+                    delay(1000L)
+                } else {
+                    delay(5000L)
+                }
             }
         }
     }
@@ -261,6 +306,8 @@ class MainService : Service() {
                 } catch (e: Exception) {
                     Log.e(TAG, "Error in schedule checker loop", e)
                 }
+                // Schedule evaluation only (hits the DB) — actual volume enforcement runs on
+                // the much tighter startEnforcementLoop() poll.
                 delay(30 * 1000L)
             }
         }
@@ -269,14 +316,22 @@ class MainService : Service() {
     private suspend fun enforceProfileNow(source: String) {
         if (!wasEnforcing || lastEnforcedProfileId == -1) return
         
+        // Must NOT call updateEnforcementState() here: this method is itself invoked from
+        // inside that function while it holds stateMutex, and kotlinx Mutex is not reentrant —
+        // re-entering suspends forever, permanently freezing the checker loop and all
+        // broadcast-driven enforcement. onStartCommand/the periodic sweep handle teardown.
         if (!AppPreferences.getInstance(applicationContext).isGlobalEnabled()) {
-            updateEnforcementState("GlobalDisabled")
+            Log.d(TAG, "[$source] Globally disabled, skipping enforcement.")
             return
         }
 
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
-        val database = AppDatabase.getDatabase(applicationContext)
-        val profile = database.profileDao().getProfileById(lastEnforcedProfileId) ?: return
+        // Cached so the 1s poll doesn't hit the DB every tick; invalidated on every schedule
+        // re-evaluation (30s) so profile edits are picked up.
+        val profile = cachedProfile?.takeIf { it.id == lastEnforcedProfileId }
+            ?: AppDatabase.getDatabase(applicationContext).profileDao()
+                .getProfileById(lastEnforcedProfileId)?.also { cachedProfile = it }
+            ?: return
 
         if (shouldReapplyProfile(profile, audioManager)) {
             applyMutex.withLock {
@@ -319,22 +374,31 @@ class MainService : Service() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) audioManager.getStreamMinVolume(AudioManager.STREAM_ALARM) else 1
         } else VolumeReceiver.scaleVolume(audioManager, AudioManager.STREAM_ALARM, profile.silentVolume)
 
+        val isRingMuted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) audioManager.isStreamMute(AudioManager.STREAM_RING) else currentRing == 0
+        val isNotificationMuted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) audioManager.isStreamMute(AudioManager.STREAM_NOTIFICATION) else currentNotification == 0
+        val isMediaMuted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) audioManager.isStreamMute(AudioManager.STREAM_MUSIC) else currentMedia == 0
+        val isAlarmMuted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) audioManager.isStreamMute(AudioManager.STREAM_ALARM) else currentAlarm == 0
+
         val isSilentProfile = profile.ringerMode == AudioManager.RINGER_MODE_SILENT
         val ringerModeOk = if (isSilentProfile) {
-            currentRingerMode == AudioManager.RINGER_MODE_SILENT || 
-            currentRingerMode == AudioManager.RINGER_MODE_VIBRATE
+            // Validate the exact state we actually applied. Accepting "SILENT or VIBRATE or
+            // NORMAL" here is what let the user switch the ringer to vibrate/ring mid-schedule
+            // and never get corrected — every reachable state counted as satisfied.
+            when (VolumeReceiver.getEffectiveSilentMode(applicationContext)) {
+                VolumeReceiver.SILENT_MODE_ZEN_FREE ->
+                    currentRingerMode == AudioManager.RINGER_MODE_NORMAL && isRingMuted
+                VolumeReceiver.SILENT_MODE_VIBRATE ->
+                    currentRingerMode == AudioManager.RINGER_MODE_VIBRATE
+                else ->
+                    currentRingerMode == AudioManager.RINGER_MODE_SILENT
+            }
         } else if (profile.ringerMode == AudioManager.RINGER_MODE_NORMAL && expectedRing == 0) {
-            currentRingerMode == AudioManager.RINGER_MODE_NORMAL || 
+            currentRingerMode == AudioManager.RINGER_MODE_NORMAL ||
             currentRingerMode == AudioManager.RINGER_MODE_VIBRATE ||
             currentRingerMode == AudioManager.RINGER_MODE_SILENT
         } else {
             currentRingerMode == profile.ringerMode
         }
-        
-        val isRingMuted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) audioManager.isStreamMute(AudioManager.STREAM_RING) else currentRing == 0
-        val isNotificationMuted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) audioManager.isStreamMute(AudioManager.STREAM_NOTIFICATION) else currentNotification == 0
-        val isMediaMuted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) audioManager.isStreamMute(AudioManager.STREAM_MUSIC) else currentMedia == 0
-        val isAlarmMuted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) audioManager.isStreamMute(AudioManager.STREAM_ALARM) else currentAlarm == 0
 
         val ringNeedsReapply = if (expectedRing == 0) (!isRingMuted || currentRing > 0) else (currentRing != expectedRing || isRingMuted)
         val notificationNeedsReapply = if (expectedRing == 0) (!isNotificationMuted || currentNotification > 0) else (currentNotification != expectedRing || isNotificationMuted)
@@ -351,10 +415,18 @@ class MainService : Service() {
             currentAlarm != expectedAlarm || isAlarmMuted
         }
 
-        return !ringerModeOk ||
+        val needsReapply = !ringerModeOk ||
                 (!isSilentProfile && profile.ringerMode == AudioManager.RINGER_MODE_NORMAL && (ringNeedsReapply || notificationNeedsReapply)) ||
                 mediaNeedsReapply ||
                 alarmNeedsReapply
+
+        if (needsReapply) {
+            Log.d(TAG, "DEVIATION ringerMode=$currentRingerMode(ok=$ringerModeOk) " +
+                    "ring=$currentRing/muted=$isRingMuted " +
+                    "media=$currentMedia/muted=$isMediaMuted/expected=$expectedMedia/reapply=$mediaNeedsReapply " +
+                    "alarm=$currentAlarm/expected=$expectedAlarm/reapply=$alarmNeedsReapply")
+        }
+        return needsReapply
     }
 
     override fun onTaskRemoved(rootIntent: Intent?) {

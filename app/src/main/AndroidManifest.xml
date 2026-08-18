@@ -14,7 +14,6 @@
     <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
@@ -36,6 +35,25 @@
         android:protectionLevel="signature" />
 
     <uses-permission android:name="com.example.aquiethours.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION" />
+
+    <!--
+        Package visibility (Android 11+): without these, PackageManager.resolveActivity() returns
+        null for every OEM settings app, so OemBackgroundHelper would silently conclude the device
+        has no autostart screen and skip the one step that actually stops XOS/MIUI/ColorOS from
+        freezing us. Narrow <package> entries avoid the QUERY_ALL_PACKAGES policy review.
+    -->
+    <queries>
+        <package android:name="com.transsion.phonemaster" />
+        <package android:name="com.transsion.phonemanager" />
+        <package android:name="com.itel.autobootmanager" />
+        <package android:name="com.miui.securitycenter" />
+        <package android:name="com.coloros.safecenter" />
+        <package android:name="com.oppo.safe" />
+        <package android:name="com.vivo.permissionmanager" />
+        <package android:name="com.iqoo.secure" />
+        <package android:name="com.oneplus.security" />
+        <package android:name="com.huawei.systemmanager" />
+    </queries>
 
     <application
         android:allowBackup="true"
@@ -64,12 +82,33 @@
 
         <receiver
             android:name="com.example.aquiethours.receiver.VolumeReceiver"
-            android:exported="false" />
-        <receiver
-            android:name="com.example.aquiethours.receiver.BootReceiver"
             android:exported="false" >
             <intent-filter>
+                <action android:name="com.example.aquiethours.ACTION_SCHEDULE_START" />
+                <action android:name="com.example.aquiethours.ACTION_SCHEDULE_END" />
+            </intent-filter>
+        </receiver>
+        <receiver
+            android:name="com.example.aquiethours.receiver.BootReceiver"
+            android:directBootAware="true"
+            android:exported="true" >
+            <!--
+                MUST be exported: BOOT_COMPLETED and friends are broadcast by the system (uid
+                1000), and the broadcast queue refuses to deliver to a non-exported receiver in
+                another uid ("Permission Denial: ... not exported"). With exported="false" this
+                receiver never ran, so alarms were never rearmed after a reboot or an app update.
+                These are all protected broadcasts, so exporting carries no spoofing risk.
+            -->
+            <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.LOCKED_BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.htc.intent.action.QUICKBOOT_POWERON" />
+                <!-- App updates wipe every alarm; without this nothing rearms until manual open. -->
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+                <!-- Wall-clock jumps invalidate every RTC alarm we computed. -->
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
             </intent-filter>
         </receiver>
         <receiver
@@ -279,6 +318,16 @@
         <receiver
             android:name="com.google.android.datatransport.runtime.scheduling.jobscheduling.AlarmManagerSchedulerBroadcastReceiver"
             android:exported="false" />
+
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 
 </manifest>

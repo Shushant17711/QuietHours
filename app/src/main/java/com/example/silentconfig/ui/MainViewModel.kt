@@ -40,8 +40,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun updateProfile(profile: Profile) {
+        viewModelScope.launch {
+            profileDao.update(profile)
+        }
+    }
+
     fun deleteProfile(profile: Profile) {
         viewModelScope.launch {
+            // Schedule rows for this profile cascade-delete in the DB, but their AlarmManager
+            // entries don't clean themselves up — cancel them first or they linger forever.
+            schedules.value.filter { it.profileId == profile.id }.forEach { silentScheduler.cancel(it) }
             profileDao.delete(profile)
         }
     }

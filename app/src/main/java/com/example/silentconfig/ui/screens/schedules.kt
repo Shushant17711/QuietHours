@@ -12,6 +12,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.outlined.Edit
 import com.example.aquiethours.ui.icons.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -37,6 +38,7 @@ fun ProfileScreen(
 ) {
     val profiles by viewModel.profiles.collectAsState()
     var showDialog by remember { mutableStateOf(false) }
+    var profileBeingEdited by remember { mutableStateOf<Profile?>(null) }
 
     Scaffold(
         topBar = {
@@ -118,18 +120,28 @@ fun ProfileScreen(
                 items(profiles) { profile ->
                     ProfileCard(
                         profile = profile,
+                        onEdit = { profileBeingEdited = profile },
                         onDelete = { viewModel.deleteProfile(profile) }
                     )
                 }
             }
         }
 
-        if (showDialog) {
+        if (showDialog || profileBeingEdited != null) {
             AddProfileDialog(
-                onDismiss = { showDialog = false },
-                onAdd = {
-                    viewModel.addProfile(it)
+                initialProfile = profileBeingEdited,
+                onDismiss = {
                     showDialog = false
+                    profileBeingEdited = null
+                },
+                onSave = { updatedProfile ->
+                    if (profileBeingEdited != null) {
+                        viewModel.updateProfile(updatedProfile.copy(id = profileBeingEdited!!.id))
+                    } else {
+                        viewModel.addProfile(updatedProfile)
+                    }
+                    showDialog = false
+                    profileBeingEdited = null
                 }
             )
         }
@@ -139,6 +151,7 @@ fun ProfileScreen(
 @Composable
 private fun ProfileCard(
     profile: Profile,
+    onEdit: () -> Unit,
     onDelete: () -> Unit
 ) {
     val ringerIcon: ImageVector
@@ -210,13 +223,23 @@ private fun ProfileCard(
                         )
                     }
                 }
-                IconButton(onClick = onDelete) {
-                    Icon(
-                        Icons.Default.Delete,
-                        contentDescription = "Delete",
-                        tint = ErrorDark.copy(alpha = 0.6f),
-                        modifier = Modifier.size(20.dp)
-                    )
+                Row {
+                    IconButton(onClick = onEdit) {
+                        Icon(
+                            Icons.Outlined.Edit,
+                            contentDescription = "Edit",
+                            tint = SecondaryDark,
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                    IconButton(onClick = onDelete) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Delete",
+                            tint = ErrorDark.copy(alpha = 0.6f),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
                 }
             }
 
@@ -278,14 +301,15 @@ private fun VolumeBar(label: String, value: Int, color: Color) {
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AddProfileDialog(
+    initialProfile: Profile? = null,
     onDismiss: () -> Unit,
-    onAdd: (Profile) -> Unit
+    onSave: (Profile) -> Unit
 ) {
-    var name by remember { mutableStateOf("") }
-    var ringerMode by remember { mutableIntStateOf(2) } // Normal by default
-    var ringVolume by remember { mutableStateOf(50f) }
-    var mediaVolume by remember { mutableStateOf(50f) }
-    var silentVolume by remember { mutableStateOf(50f) }
+    var name by remember { mutableStateOf(initialProfile?.name ?: "") }
+    var ringerMode by remember { mutableIntStateOf(initialProfile?.ringerMode ?: 2) }
+    var ringVolume by remember { mutableStateOf(initialProfile?.ringVolume?.toFloat() ?: 50f) }
+    var mediaVolume by remember { mutableStateOf(initialProfile?.mediaVolume?.toFloat() ?: 50f) }
+    var silentVolume by remember { mutableStateOf(initialProfile?.silentVolume?.toFloat() ?: 50f) }
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -293,7 +317,7 @@ fun AddProfileDialog(
         shape = RoundedCornerShape(24.dp),
         title = {
             Text(
-                "New Sound Profile",
+                if (initialProfile != null) "Edit Sound Profile" else "New Sound Profile",
                 style = MaterialTheme.typography.titleLarge
             )
         },
@@ -387,7 +411,7 @@ fun AddProfileDialog(
         confirmButton = {
             Button(
                 onClick = {
-                    onAdd(
+                    onSave(
                         Profile(
                             name = name,
                             ringerMode = ringerMode,
@@ -401,7 +425,7 @@ fun AddProfileDialog(
                 shape = RoundedCornerShape(12.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = PrimaryDark)
             ) {
-                Text("Create", fontWeight = FontWeight.SemiBold)
+                Text(if (initialProfile != null) "Save" else "Create", fontWeight = FontWeight.SemiBold)
             }
         },
         dismissButton = {

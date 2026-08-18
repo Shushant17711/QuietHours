@@ -35,9 +35,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
-import com.example.aquiethours.data.AppPreferences
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.compose.NavHost
+import androidx.compose.runtime.LaunchedEffect
+import com.example.aquiethours.data.AppPreferences
+import com.example.aquiethours.util.GitHubUpdateChecker
+import com.example.aquiethours.util.OemBackgroundHelper
+import com.example.aquiethours.util.UpdateInfo
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import com.example.aquiethours.ui.MainViewModel
@@ -53,6 +57,7 @@ class MainActivity : ComponentActivity() {
 
     private var hasRequestedExactAlarm = false
     private var hasRequestedBatteryOpt = false
+    private var hasRequestedAutostart = false
     private var hasRequestedDnd = false
     private var hasRequestedNotifications = false
 
@@ -89,6 +94,53 @@ class MainActivity : ComponentActivity() {
                             },
                             onDecline = {
                                 finishAffinity() // Close the app if they decline
+                            }
+                        )
+                    }
+
+                    var updateInfo by remember { mutableStateOf<UpdateInfo?>(null) }
+                    
+                    LaunchedEffect(Unit) {
+                        val prefs = AppPreferences.getInstance(this@MainActivity)
+                        val lastCheck = prefs.getLastUpdateCheckTime()
+                        val now = System.currentTimeMillis()
+                        
+                        // 24 hours in millis: 86400000
+                        if (now - lastCheck > 86400000) {
+                            val packageInfo = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                                packageManager.getPackageInfo(packageName, PackageManager.PackageInfoFlags.of(0))
+                            } else {
+                                @Suppress("DEPRECATION")
+                                packageManager.getPackageInfo(packageName, 0)
+                            }
+                            val versionName = packageInfo.versionName ?: "1.0"
+                            
+                            val info = GitHubUpdateChecker.checkForUpdate(versionName)
+                            if (info != null) {
+                                updateInfo = info
+                            }
+                            prefs.setLastUpdateCheckTime(now)
+                        }
+                    }
+
+                    if (updateInfo != null) {
+                        val uriHandler = LocalUriHandler.current
+                        AlertDialog(
+                            onDismissRequest = { updateInfo = null },
+                            title = { Text("Update Available") },
+                            text = { Text("A new version (${updateInfo!!.newVersion}) of Quiet Hours is available. Would you like to download it now?") },
+                            confirmButton = {
+                                TextButton(onClick = {
+                                    uriHandler.openUri(updateInfo!!.downloadUrl)
+                                    updateInfo = null
+                                }) {
+                                    Text("Update Now")
+                                }
+                            },
+                            dismissButton = {
+                                TextButton(onClick = { updateInfo = null }) {
+                                    Text("Later")
+                                }
                             }
                         )
                     }
@@ -134,7 +186,19 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        
+
+        // Some OEMs (MIUI, XOS/HiOS, ColorOS, FuntouchOS, OxygenOS, EMUI) gate background
+        // execution behind their own separate "Autostart" permission on top of the standard
+        // battery-optimization exemption above. Without it these ROMs kill the foreground
+        // service outright, so schedules only ever apply when the app is manually reopened.
+        if (!hasRequestedAutostart) {
+            hasRequestedAutostart = true
+            if (OemBackgroundHelper.isAggressiveOem()) {
+                OemBackgroundHelper.openAutostartSettings(this)
+                return
+            }
+        }
+
         // Request Notification permission (Required for Foreground Services on Android 13+)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
@@ -237,10 +301,10 @@ fun TermsAndConditionsDialog(onAccept: () -> Unit, onDecline: () -> Unit) {
                 
                 Spacer(modifier = Modifier.height(8.dp))
                 
-                TextButton(onClick = { uriHandler.openUri("https://google.com") /* TODO: Replace with your actual Terms URL */ }) {
+                TextButton(onClick = { uriHandler.openUri("https://github.com/Shushant17711/QuietHours/blob/main/TERMS_AND_CONDITIONS.md") }) {
                     Text("Read Terms and Conditions")
                 }
-                TextButton(onClick = { uriHandler.openUri("https://google.com") /* TODO: Replace with your actual Privacy Policy URL */ }) {
+                TextButton(onClick = { uriHandler.openUri("https://github.com/Shushant17711/QuietHours/blob/main/PRIVACY_POLICY.md") }) {
                     Text("Read Privacy Policy")
                 }
             }

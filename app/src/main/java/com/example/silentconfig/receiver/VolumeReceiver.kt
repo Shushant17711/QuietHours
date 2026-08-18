@@ -102,6 +102,8 @@ class VolumeReceiver : BroadcastReceiver() {
         private const val KEY_HAS_SAVED_STATE = "has_saved_state"
         private const val ENFORCEMENT_PREFS = "aquiethours_enforcement"
         private const val KEY_ENFORCING_DISABLED = "enforcing_disabled"
+        private const val KEY_DND_COUPLED_ROM = "dnd_coupled_rom"
+        private const val KEY_EFFECTIVE_SILENT_MODE = "effective_silent_mode"
 
         /**
          * Sets/clears the "enforcing disabled" flag in SharedPreferences.
@@ -119,6 +121,79 @@ class VolumeReceiver : BroadcastReceiver() {
         fun isEnforcingDisabled(context: Context): Boolean {
             return context.getSharedPreferences(ENFORCEMENT_PREFS, Context.MODE_PRIVATE)
                 .getBoolean(KEY_ENFORCING_DISABLED, false)
+        }
+
+        /** How silence was actually achieved, so the enforcer can validate that exact state. */
+        const val SILENT_MODE_TRUE_SILENT = 0
+        const val SILENT_MODE_VIBRATE = 1
+        const val SILENT_MODE_ZEN_FREE = 2
+
+        fun getEffectiveSilentMode(context: Context): Int {
+            return context.getSharedPreferences(ENFORCEMENT_PREFS, Context.MODE_PRIVATE)
+                .getInt(KEY_EFFECTIVE_SILENT_MODE, SILENT_MODE_TRUE_SILENT)
+        }
+
+        fun setEffectiveSilentMode(context: Context, mode: Int) {
+            context.getSharedPreferences(ENFORCEMENT_PREFS, Context.MODE_PRIVATE)
+                .edit().putInt(KEY_EFFECTIVE_SILENT_MODE, mode).commit()
+        }
+
+        /**
+         * True once we've observed this ROM forcing Zen/DND on as a side effect of entering
+         * RINGER_MODE_SILENT (Transsion XOS/HiOS do this). Such devices link the two inside
+         * ZenModeHelper via VolumePolicy.doNotDisturbWhenSilent, which no app API can override.
+         */
+        fun isDndCoupledRom(context: Context): Boolean {
+            return context.getSharedPreferences(ENFORCEMENT_PREFS, Context.MODE_PRIVATE)
+                .getBoolean(KEY_DND_COUPLED_ROM, false)
+        }
+
+        fun setDndCoupledRom(context: Context, coupled: Boolean) {
+            context.getSharedPreferences(ENFORCEMENT_PREFS, Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_DND_COUPLED_ROM, coupled).commit()
+        }
+
+        /**
+         * Silence without ever touching Zen: keep the ringer in NORMAL so the ROM's
+         * silent -> DND link never fires, and mute the audible streams instead.
+         *
+         * Deliberately uses ADJUST_MUTE rather than setStreamVolume(stream, 0): a zero index on
+         * the ringer stream makes AudioService.getNewRingerMode() flip the device into VIBRATE,
+         * which would defeat the whole point (and buzz in class).
+         */
+        suspend fun applyZenFreeSilence(audioManager: AudioManager) {
+            for (attempt in 0 until 3) {
+                try {
+                    audioManager.ringerMode = AudioManager.RINGER_MODE_NORMAL
+                } catch (e: SecurityException) {
+                    Log.w(TAG, "Could not set RINGER_MODE_NORMAL for zen-free silence", e)
+                }
+
+                try {
+                    audioManager.adjustStreamVolume(AudioManager.STREAM_RING, AudioManager.ADJUST_MUTE, 0)
+                    audioManager.adjustStreamVolume(AudioManager.STREAM_NOTIFICATION, AudioManager.ADJUST_MUTE, 0)
+                    audioManager.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_MUTE, 0)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to mute ringer streams", e)
+                }
+
+                if (isZenFreeSilenceHolding(audioManager)) {
+                    Log.d(TAG, "Zen-free silence applied (ringer NORMAL, ring stream muted)")
+                    return
+                }
+                delay(120)
+            }
+            Log.w(TAG, "Zen-free silence did not fully hold. ringerMode=${audioManager.ringerMode}")
+        }
+
+        /** Ringer left in NORMAL (so Zen never triggers) with the ring stream actually muted. */
+        fun isZenFreeSilenceHolding(audioManager: AudioManager): Boolean {
+            val ringMuted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+                audioManager.isStreamMute(AudioManager.STREAM_RING)
+            } else {
+                audioManager.getStreamVolume(AudioManager.STREAM_RING) == 0
+            }
+            return ringMuted && audioManager.ringerMode == AudioManager.RINGER_MODE_NORMAL
         }
 
         fun calendarDayToJavaDayOfWeek(calDay: Int): java.time.DayOfWeek {
@@ -168,23 +243,78 @@ class VolumeReceiver : BroadcastReceiver() {
             
             // 2. Apply volumes and ringer mode
             if (ringerMode == AudioManager.RINGER_MODE_SILENT) {
-                // Try true silent mode first (no vibration, no sound)
-                try {
-                    audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT
-                } catch (e: SecurityException) {
-                    Log.w(TAG, "RINGER_MODE_SILENT blocked, falling back to VIBRATE", e)
-                    audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
-                }
-                if (audioManager.ringerMode != AudioManager.RINGER_MODE_SILENT) {
-                    audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
-                }
-                
-                try {
-                    audioManager.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
-                    audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0)
-                    audioManager.setStreamVolume(AudioManager.STREAM_SYSTEM, 0, 0)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to set silent stream volumes", e)
+                if (isDndCoupledRom(context)) {
+                    // This ROM (XOS/HiOS and friends) forces Zen/DND on whenever
+                    // RINGER_MODE_SILENT is set, so we never ask for silent at all here.
+                    setEffectiveSilentMode(context, SILENT_MODE_ZEN_FREE)
+                    applyZenFreeSilence(audioManager)
+                } else {
+                    val filterBefore = notificationManager?.currentInterruptionFilter
+                        ?: android.app.NotificationManager.INTERRUPTION_FILTER_ALL
+
+                    // True silent. Some ROMs apply the ringer-mode write asynchronously, so an
+                    // immediate read-back can still report the old value — retry before
+                    // downgrading, otherwise we'd needlessly land on VIBRATE and the phone
+                    // buzzes when the user asked for silence.
+                    var silentApplied = false
+                    for (attempt in 0 until 3) {
+                        try {
+                            audioManager.ringerMode = AudioManager.RINGER_MODE_SILENT
+                        } catch (e: SecurityException) {
+                            Log.w(TAG, "RINGER_MODE_SILENT blocked by permission", e)
+                            break
+                        }
+                        if (audioManager.ringerMode == AudioManager.RINGER_MODE_SILENT) {
+                            silentApplied = true
+                            break
+                        }
+                        delay(120)
+                    }
+
+                    // Did the ROM switch DND on behind our back as a side effect of going
+                    // silent? If so this device links the two at the framework level, which no
+                    // app API can override — remember it and use the zen-free path from now on.
+                    val filterAfter = notificationManager?.currentInterruptionFilter
+                        ?: android.app.NotificationManager.INTERRUPTION_FILTER_ALL
+                    val romForcedDnd = hasDndAccess &&
+                            filterBefore == android.app.NotificationManager.INTERRUPTION_FILTER_ALL &&
+                            filterAfter != android.app.NotificationManager.INTERRUPTION_FILTER_ALL &&
+                            filterAfter != android.app.NotificationManager.INTERRUPTION_FILTER_UNKNOWN
+
+                    if (romForcedDnd) {
+                        Log.w(TAG, "ROM forced DND on entering silent. Switching to zen-free silence permanently.")
+                        setDndCoupledRom(context, true)
+                        setEffectiveSilentMode(context, SILENT_MODE_ZEN_FREE)
+                        try {
+                            notificationManager?.setInterruptionFilter(
+                                android.app.NotificationManager.INTERRUPTION_FILTER_ALL
+                            )
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to undo ROM-forced DND", e)
+                        }
+                        applyZenFreeSilence(audioManager)
+                    } else {
+                        if (!silentApplied) {
+                            Log.w(TAG, "Could not reach RINGER_MODE_SILENT, falling back to VIBRATE")
+                            setEffectiveSilentMode(context, SILENT_MODE_VIBRATE)
+                            try {
+                                audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
+                            } catch (e: SecurityException) {
+                                Log.e(TAG, "Failed to fall back to VIBRATE", e)
+                            }
+                        } else {
+                            setEffectiveSilentMode(context, SILENT_MODE_TRUE_SILENT)
+                        }
+                        // Safe here: the device is already out of NORMAL, so a 0 index can't
+                        // trigger the ringer-mode flip that getNewRingerMode() would apply.
+                        try {
+                            audioManager.setStreamVolume(AudioManager.STREAM_RING, 0, 0)
+                            audioManager.setStreamVolume(AudioManager.STREAM_NOTIFICATION, 0, 0)
+                            audioManager.setStreamVolume(AudioManager.STREAM_SYSTEM, 0, 0)
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to set silent stream volumes", e)
+                        }
+                    }
                 }
             } else if (ringerMode == AudioManager.RINGER_MODE_VIBRATE) {
                 audioManager.ringerMode = AudioManager.RINGER_MODE_VIBRATE
@@ -246,8 +376,15 @@ class VolumeReceiver : BroadcastReceiver() {
             try {
                 if (scaledMedia > 0) {
                     audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
+                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, scaledMedia, 0)
+                } else {
+                    // A bare index of 0 does NOT set the stream's mute flag, so isStreamMute()
+                    // stays false and every enforcement pass sees the profile as still unmet —
+                    // re-grabbing audio focus forever while leaving a level any volume-key press
+                    // trivially overrides. ADJUST_MUTE sets the real mute flag and sticks.
+                    audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, 0, 0)
+                    audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_MUTE, 0)
                 }
-                audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, scaledMedia, 0)
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to set media volume", e)
             }
@@ -276,16 +413,27 @@ class VolumeReceiver : BroadcastReceiver() {
                 Log.e(TAG, "Failed to set alarm volume", e)
             }
 
-            // 3. Set the final DND state correctly based on ringer mode to prevent OEM desync
-            if (hasDndAccess) {
+            // 3. Do Not Disturb handling.
+            // A Silent profile must NOT switch DND on. Since Android 8, RINGER_MODE_SILENT
+            // alone is true silent (no ring, no vibrate, no notification sound) and is
+            // independent of DND — ACCESS_NOTIFICATION_POLICY is only the permission gate
+            // for calling it. Enabling DND additionally suppresses notifications entirely
+            // and shows the system DND indicator, which is not what "Silent" should mean.
+            //
+            // So we only ever CLEAR DND, never set it: an active filter blocks ring and
+            // notification volume changes, so a Normal/Vibrate profile can't take effect
+            // until it's lifted. A Silent profile leaves the user's own DND choice alone.
+            val nm = notificationManager
+            if (hasDndAccess && nm != null && ringerMode != AudioManager.RINGER_MODE_SILENT) {
                 try {
-                    if (ringerMode == AudioManager.RINGER_MODE_SILENT) {
-                        notificationManager?.setInterruptionFilter(android.app.NotificationManager.INTERRUPTION_FILTER_ALARMS)
-                    } else {
-                        notificationManager?.setInterruptionFilter(android.app.NotificationManager.INTERRUPTION_FILTER_ALL)
+                    val currentFilter = nm.currentInterruptionFilter
+                    val dndIsBlocking = currentFilter != android.app.NotificationManager.INTERRUPTION_FILTER_ALL &&
+                            currentFilter != android.app.NotificationManager.INTERRUPTION_FILTER_UNKNOWN
+                    if (dndIsBlocking) {
+                        nm.setInterruptionFilter(android.app.NotificationManager.INTERRUPTION_FILTER_ALL)
                     }
                 } catch (e: Exception) {
-                    Log.e(TAG, "Failed to set final DND state", e)
+                    Log.e(TAG, "Failed to clear DND state", e)
                 }
             }
 
@@ -339,7 +487,7 @@ class VolumeReceiver : BroadcastReceiver() {
                     val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
                     if (notificationManager.isNotificationPolicyAccessGranted) {
                         try {
-                            val filterToSet = if (savedFilter != -1) savedFilter else android.app.NotificationManager.INTERRUPTION_FILTER_ALL
+                            val filterToSet = if (savedFilter > 0) savedFilter else android.app.NotificationManager.INTERRUPTION_FILTER_ALL
                             notificationManager.setInterruptionFilter(filterToSet)
                             Log.d(TAG, "Restored DND filter to $filterToSet before volume change")
                             

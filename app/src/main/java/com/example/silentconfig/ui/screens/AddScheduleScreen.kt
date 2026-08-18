@@ -60,6 +60,7 @@ fun AddScheduleScreen(
     var isEditing by remember { mutableStateOf(false) }
     var showErrorDialog by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf("") }
+    var showAddProfileDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(scheduleId, schedules) {
         if (scheduleId != null && !isEditing) {
@@ -232,19 +233,16 @@ fun AddScheduleScreen(
             Spacer(modifier = Modifier.height(10.dp))
 
             if (profiles.isEmpty()) {
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
+                OutlinedButton(
+                    onClick = { showAddProfileDialog = true },
+                    modifier = Modifier.fillMaxWidth().height(50.dp),
                     shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = SurfaceContainerDark
-                    )
+                    border = ButtonDefaults.outlinedButtonBorder.copy(
+                        brush = Brush.linearGradient(listOf(SecondaryDark, GradientTeal))
+                    ),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = SecondaryLight)
                 ) {
-                    Text(
-                        "No profiles yet. Create one in Profiles first.",
-                        modifier = Modifier.padding(16.dp),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Text("Create a Profile", fontWeight = FontWeight.SemiBold)
                 }
             } else {
                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -368,6 +366,16 @@ fun AddScheduleScreen(
         }
     }
     
+    if (showAddProfileDialog) {
+        AddProfileDialog(
+            onDismiss = { showAddProfileDialog = false },
+            onSave = {
+                viewModel.addProfile(it)
+                showAddProfileDialog = false
+            }
+        )
+    }
+
     if (showErrorDialog) {
         AlertDialog(
             onDismissRequest = { showErrorDialog = false },

@@ -22,10 +22,19 @@ class AppPreferences(context: Context) {
         prefs.edit().putBoolean(KEY_TERMS_ACCEPTED, accepted).apply()
     }
 
+    fun getLastUpdateCheckTime(): Long {
+        return prefs.getLong(KEY_LAST_UPDATE_CHECK, 0L)
+    }
+
+    fun setLastUpdateCheckTime(time: Long) {
+        prefs.edit().putLong(KEY_LAST_UPDATE_CHECK, time).apply()
+    }
+
     companion object {
         private const val PREFS_NAME = "aquiethours_prefs"
         private const val KEY_GLOBAL_ENABLED = "global_enabled"
         private const val KEY_TERMS_ACCEPTED = "terms_accepted"
+        private const val KEY_LAST_UPDATE_CHECK = "last_update_check"
         
         @Volatile
         private var INSTANCE: AppPreferences? = null

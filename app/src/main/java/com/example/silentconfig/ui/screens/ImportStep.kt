@@ -3,6 +3,8 @@ package com.example.aquiethours.ui.screens
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.widget.Toast
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
@@ -44,6 +46,7 @@ import com.example.aquiethours.util.OcrHelper
 import com.example.aquiethours.util.ShareHelper
 import com.example.aquiethours.util.format12Hour
 import com.example.aquiethours.util.ParsedScheduleEntry
+import com.example.aquiethours.util.ScheduleUtils
 import kotlinx.coroutines.launch
 
 private enum class ImportStep {
@@ -56,6 +59,16 @@ private enum class ImportStep {
     DONE
 }
 
+private fun createTempImageUri(context: android.content.Context): Uri {
+    val file = File(context.cacheDir, "camera_images").apply { mkdirs() }
+    val tempFile = File.createTempFile("camera_", ".jpg", file)
+    return FileProvider.getUriForFile(
+        context,
+        "${context.packageName}.fileprovider",
+        tempFile
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ImportTimetableScreen(
@@ -64,8 +77,9 @@ fun ImportTimetableScreen(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val settingsManager = remember { SettingsManager(context) }
+    val settingsManager = remember { SettingsManager.getInstance(context) }
     val profiles by viewModel.profiles.collectAsState()
+    val existingSchedules by viewModel.schedules.collectAsState()
 
     var currentStep by remember { mutableStateOf(ImportStep.SELECT_FILE) }
     var selectedUri by remember { mutableStateOf<Uri?>(null) }
@@ -75,6 +89,31 @@ fun ImportTimetableScreen(
     var selectedProfileId by remember { mutableStateOf<Int?>(null) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
     var removedIndices by remember { mutableStateOf(setOf<Int>()) }
+    var showAddProfileDialog by remember { mutableStateOf(false) }
+    var cameraUri by remember { mutableStateOf<Uri?>(null) }
+
+    val takePictureLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success ->
+        if (success) {
+            cameraUri?.let { uri ->
+                selectedUri = uri
+                isPdf = false
+                errorMessage = null
+                currentStep = ImportStep.OCR_PROCESSING
+
+                scope.launch {
+                    try {
+                        ocrText = "Image captured successfully.\n\nThe AI will directly analyze the visual layout of your timetable for accurate extraction."
+                        currentStep = ImportStep.OCR_RESULT
+                    } catch (e: Exception) {
+                        errorMessage = "Failed to process image: ${e.message}"
+                        currentStep = ImportStep.SELECT_FILE
+                    }
+                }
+            }
+        }
+    }
 
     // Image picker
     val imagePickerLauncher = rememberLauncherForActivityResult(
@@ -163,6 +202,11 @@ fun ImportTimetableScreen(
                         isApiConfigured = settingsManager.isApiKeyConfigured(),
                         onPickImage = { imagePickerLauncher.launch("image/*") },
                         onPickPdf = { pdfPickerLauncher.launch("application/pdf") },
+                        onTakePicture = {
+                            val uri = createTempImageUri(context)
+                            cameraUri = uri
+                            takePictureLauncher.launch(uri)
+                        },
                         onNavigateBack = onNavigateBack
                     )
                 }
@@ -178,6 +222,7 @@ fun ImportTimetableScreen(
                         profiles = profiles.map { it.id to it.name },
                         selectedProfileId = selectedProfileId,
                         onProfileSelected = { selectedProfileId = it },
+                        onCreateProfile = { showAddProfileDialog = true },
                         onProceed = {
                             if (!settingsManager.isApiKeyConfigured()) {
                                 errorMessage = "Please set your OpenRouter API key in Settings first."
@@ -233,13 +278,15 @@ fun ImportTimetableScreen(
                         profileName = profiles.find { it.id == selectedProfileId }?.name ?: "Unknown",
                         onRemoveEntry = { index ->
                             removedIndices = removedIndices + index
+                            errorMessage = null
                         },
                         onRestoreEntry = { index ->
                             removedIndices = removedIndices - index
+                            errorMessage = null
                         },
+                        errorMessage = errorMessage,
                         onSaveAll = {
-                            currentStep = ImportStep.SAVING
-                            val schedules = parsedEntries
+                            val newSchedules = parsedEntries
                                 .filterIndexed { index, _ -> index !in removedIndices }
                                 .map { entry ->
                                     Schedule(
@@ -252,10 +299,27 @@ fun ImportTimetableScreen(
                                         label = entry.label
                                     )
                                 }
-                            viewModel.addSchedules(schedules)
-                            currentStep = ImportStep.DONE
+
+                            var hasAnyOverlap = false
+                            val cumulativeSchedules = existingSchedules.toMutableList()
+                            for (newSchedule in newSchedules) {
+                                if (ScheduleUtils.hasOverlap(newSchedule, cumulativeSchedules)) {
+                                    hasAnyOverlap = true
+                                    break
+                                }
+                                cumulativeSchedules.add(newSchedule)
+                            }
+
+                            if (hasAnyOverlap) {
+                                errorMessage = "One or more imported schedules overlap with an existing schedule or with each other. Remove the conflicting entries and try again."
+                            } else {
+                                currentStep = ImportStep.SAVING
+                                viewModel.addSchedules(newSchedules)
+                                currentStep = ImportStep.DONE
+                            }
                         },
                         onBack = {
+                            errorMessage = null
                             currentStep = ImportStep.OCR_RESULT
                         }
                     )
@@ -272,6 +336,16 @@ fun ImportTimetableScreen(
                     )
                 }
             }
+        }
+
+        if (showAddProfileDialog) {
+            AddProfileDialog(
+                onDismiss = { showAddProfileDialog = false },
+                onSave = {
+                    viewModel.addProfile(it)
+                    showAddProfileDialog = false
+                }
+            )
         }
     }
 }
@@ -358,6 +432,7 @@ private fun SelectFileContent(
     isApiConfigured: Boolean,
     onPickImage: () -> Unit,
     onPickPdf: () -> Unit,
+    onTakePicture: () -> Unit,
     onNavigateBack: () -> Unit
 ) {
     var showManualInstructionsDialog by remember { mutableStateOf(false) }
@@ -539,6 +614,30 @@ private fun SelectFileContent(
 
         Spacer(modifier = Modifier.height(12.dp))
 
+        // Camera button
+        Button(
+            onClick = onTakePicture,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp),
+            shape = RoundedCornerShape(16.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = SecondaryDark)
+        ) {
+            Icon(
+                Icons.Outlined.CameraAlt,
+                contentDescription = null,
+                modifier = Modifier.size(22.dp)
+            )
+            Spacer(modifier = Modifier.width(10.dp))
+            Text(
+                "Open Camera",
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.SemiBold
+            )
+        }
+
+        Spacer(modifier = Modifier.height(12.dp))
+
         // PDF button
         OutlinedButton(
             onClick = onPickPdf,
@@ -602,6 +701,7 @@ private fun OcrResultContent(
     profiles: List<Pair<Int, String>>,
     selectedProfileId: Int?,
     onProfileSelected: (Int) -> Unit,
+    onCreateProfile: () -> Unit,
     onProceed: () -> Unit,
     onRetry: () -> Unit,
     errorMessage: String?
@@ -653,16 +753,16 @@ private fun OcrResultContent(
         Spacer(modifier = Modifier.height(8.dp))
 
         if (profiles.isEmpty()) {
-            Card(
+            OutlinedButton(
+                onClick = onCreateProfile,
+                modifier = Modifier.fillMaxWidth().height(50.dp),
                 shape = RoundedCornerShape(12.dp),
-                colors = CardDefaults.cardColors(containerColor = ErrorContainerDark.copy(alpha = 0.5f))
+                border = ButtonDefaults.outlinedButtonBorder.copy(
+                    brush = Brush.linearGradient(listOf(SecondaryDark, GradientTeal))
+                ),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = SecondaryLight)
             ) {
-                Text(
-                    "No profiles found. Create one in Profiles first.",
-                    modifier = Modifier.padding(12.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = ErrorDark
-                )
+                Text("Create a Profile", fontWeight = FontWeight.SemiBold)
             }
         } else {
             Row(
@@ -738,7 +838,8 @@ private fun ReviewResultsContent(
     onRemoveEntry: (Int) -> Unit,
     onRestoreEntry: (Int) -> Unit,
     onSaveAll: () -> Unit,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    errorMessage: String? = null
 ) {
     val activeCount = entries.size - removedIndices.size
 
@@ -842,6 +943,15 @@ private fun ReviewResultsContent(
                     }
                 }
             }
+        }
+
+        errorMessage?.let {
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(
+                it,
+                style = MaterialTheme.typography.bodySmall,
+                color = ErrorDark
+            )
         }
 
         Spacer(modifier = Modifier.height(16.dp))

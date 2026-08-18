@@ -2,6 +2,7 @@ package com.example.aquiethours.ui.screens
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import android.os.PowerManager
 import android.widget.Toast
 import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.tween
@@ -31,6 +32,7 @@ import androidx.compose.ui.unit.dp
 import com.example.aquiethours.data.SettingsManager
 import com.example.aquiethours.ui.theme.*
 import com.example.aquiethours.util.AiScheduleParser
+import com.example.aquiethours.util.OemBackgroundHelper
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -39,7 +41,7 @@ fun SettingsScreen(
     onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
-    val settingsManager = remember { SettingsManager(context) }
+    val settingsManager = remember { SettingsManager.getInstance(context) }
     val scope = rememberCoroutineScope()
 
     var apiKey by remember { mutableStateOf(settingsManager.getApiKey()) }
@@ -48,6 +50,19 @@ fun SettingsScreen(
     var isTesting by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<Boolean?>(null) }
     var showModelDropdown by remember { mutableStateOf(false) }
+
+    val powerManager = remember { context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager }
+    var isBatteryUnrestricted by remember { mutableStateOf(powerManager.isIgnoringBatteryOptimizations(context.packageName)) }
+    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
+    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
+        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
+            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
+                isBatteryUnrestricted = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     val availableModels = listOf(
         "google/gemini-2.5-flash" to "Gemini 2.5 Flash",
@@ -86,6 +101,104 @@ fun SettingsScreen(
                 .padding(horizontal = 20.dp)
         ) {
             Spacer(modifier = Modifier.height(8.dp))
+
+            // Background Reliability section — schedules silently stop working on many phones
+            // (MIUI, XOS/HiOS, ColorOS, FuntouchOS, OxygenOS, EMUI) unless the OS's own
+            // background-execution permissions are granted, separate from app permissions.
+            Text(
+                "Background Reliability",
+                style = MaterialTheme.typography.titleMedium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+            Spacer(modifier = Modifier.height(4.dp))
+            Text(
+                "Schedules need these to keep working without opening the app.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            Card(
+                shape = RoundedCornerShape(14.dp),
+                colors = CardDefaults.cardColors(containerColor = SurfaceContainerDark)
+            ) {
+                Column(modifier = Modifier.padding(14.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Icon(
+                            if (isBatteryUnrestricted) Icons.Outlined.CheckCircle else Icons.Outlined.Warning,
+                            contentDescription = null,
+                            tint = if (isBatteryUnrestricted) SecondaryLight else ErrorDark,
+                            modifier = Modifier.size(20.dp)
+                        )
+                        Spacer(modifier = Modifier.width(10.dp))
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                "Battery optimization",
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                if (isBatteryUnrestricted) "Unrestricted" else "Restricted — schedules may not fire",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = if (isBatteryUnrestricted) SecondaryLight else ErrorDark
+                            )
+                        }
+                        if (!isBatteryUnrestricted) {
+                            TextButton(onClick = { OemBackgroundHelper.openBatteryOptimizationSettings(context) }) {
+                                Text("Disable")
+                            }
+                        }
+                    }
+
+                    if (OemBackgroundHelper.isAggressiveOem()) {
+                        Spacer(modifier = Modifier.height(12.dp))
+                        HorizontalDivider(color = OutlineVariantDark)
+                        Spacer(modifier = Modifier.height(12.dp))
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Outlined.Warning,
+                                contentDescription = null,
+                                tint = ErrorDark,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(modifier = Modifier.width(10.dp))
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    "${OemBackgroundHelper.getManufacturerLabel()} Autostart",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    "Required on this phone or the app gets killed in the background",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                            TextButton(onClick = {
+                                val opened = OemBackgroundHelper.openAutostartSettings(context)
+                                if (!opened) {
+                                    Toast.makeText(
+                                        context,
+                                        "Look for \"Autostart\" or \"Startup Manager\" in your phone's Security/Phone Manager app and enable it here.",
+                                        Toast.LENGTH_LONG
+                                    ).show()
+                                }
+                            }) {
+                                Text("Open Settings")
+                            }
+                        }
+                    }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(28.dp))
 
             // AI Setup Section Header
             Row(

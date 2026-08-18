@@ -68,7 +68,7 @@ fun HomeScreen(
     var parsedImportEntries by remember { mutableStateOf<List<ParsedScheduleEntry>?>(null) }
     var selectedProfileId by remember { mutableStateOf<Int?>(null) }
     var importError by remember { mutableStateOf<String?>(null) }
-    
+    var showAddProfileDialog by remember { mutableStateOf(false) }
     val isGlobalEnabled by viewModel.isGlobalEnabled.collectAsState()
 
     // Group schedules by day
@@ -397,7 +397,13 @@ fun HomeScreen(
                     Text("Found ${parsedImportEntries!!.size} schedules. Select a profile to assign them to:")
                     Spacer(modifier = Modifier.height(16.dp))
                     if (profiles.isEmpty()) {
-                        Text("No profiles found. Create one first.", color = MaterialTheme.colorScheme.error)
+                        OutlinedButton(
+                            onClick = { showAddProfileDialog = true },
+                            modifier = Modifier.fillMaxWidth().height(50.dp),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text("Create a Profile")
+                        }
                     } else {
                         LazyColumn(modifier = Modifier.heightIn(max = 200.dp)) {
                             items(profiles) { profile ->
@@ -471,6 +477,16 @@ fun HomeScreen(
                 }) {
                     Text("Cancel")
                 }
+            }
+        )
+    }
+
+    if (showAddProfileDialog) {
+        AddProfileDialog(
+            onDismiss = { showAddProfileDialog = false },
+            onSave = { profile ->
+                viewModel.addProfile(profile)
+                showAddProfileDialog = false
             }
         )
     }
