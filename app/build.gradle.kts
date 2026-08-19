@@ -61,7 +61,10 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.7.0")
     
     implementation("com.google.android.material:material:1.11.0")
-    
+
+    // Encrypted storage for secrets like the OpenRouter API key
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
     // Room
     val room_version = "2.6.1"
     implementation("androidx.room:room-runtime:$room_version")

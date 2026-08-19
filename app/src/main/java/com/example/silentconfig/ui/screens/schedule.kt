@@ -171,7 +171,7 @@ fun SettingsScreen(
                             Spacer(modifier = Modifier.width(10.dp))
                             Column(modifier = Modifier.weight(1f)) {
                                 Text(
-                                    "${OemBackgroundHelper.getManufacturerLabel()} Autostart",
+                                    "${OemBackgroundHelper.getManufacturerLabel()} ${OemBackgroundHelper.getAutostartScreenLabel()}",
                                     style = MaterialTheme.typography.bodyMedium,
                                     color = MaterialTheme.colorScheme.onSurface
                                 )
@@ -186,7 +186,8 @@ fun SettingsScreen(
                                 if (!opened) {
                                     Toast.makeText(
                                         context,
-                                        "Look for \"Autostart\" or \"Startup Manager\" in your phone's Security/Phone Manager app and enable it here.",
+                                        "Open your phone's Security / Phone Manager app and find " +
+                                            "\"${OemBackgroundHelper.getAutostartScreenLabel()}\", then set QuietHours to Allowed.",
                                         Toast.LENGTH_LONG
                                     ).show()
                                 }

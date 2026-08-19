@@ -19,7 +19,14 @@ import android.util.Log
 object OemBackgroundHelper {
     private const val TAG = "OemBackgroundHelper"
 
-    private data class OemEntry(val label: String, val brands: List<String>, val candidates: List<Pair<String, String>>)
+    private data class OemEntry(
+        val label: String,
+        val brands: List<String>,
+        val candidates: List<Pair<String, String>>,
+        // What THIS ROM actually calls the screen. "Autostart" is Xiaomi's word; telling an
+        // Infinix user to find "Autostart" sends them hunting for a toggle that does not exist.
+        val screenLabel: String = "Autostart"
+    )
 
     private val OEMS = listOf(
         OemEntry(
@@ -33,7 +40,10 @@ object OemBackgroundHelper {
                 "com.transsion.phonemaster" to "com.cyin.himgr.powermanager.views.activity.PowerManagerActivity",
                 "com.transsion.phonemanager" to "com.transsion.phonemanager.ui.autobootmanage.AutoBootManageActivity",
                 "com.itel.autobootmanager" to "com.itel.autobootmanager.AutoBootMangerActivity"
-            )
+            ),
+            // XOS/HiOS ships this as PhoneMaster -> "App Launch" (per-app Manage Manually /
+            // Allow). There is no screen anywhere on the device called "Autostart".
+            screenLabel = "App Launch"
         ),
         OemEntry(
             "Xiaomi (MIUI)",
@@ -48,7 +58,8 @@ object OemBackgroundHelper {
             listOf(
                 "com.coloros.safecenter" to "com.coloros.safecenter.permission.startup.StartupAppListActivity",
                 "com.oppo.safe" to "com.oppo.safe.permission.startup.StartupAppListActivity"
-            )
+            ),
+            screenLabel = "Auto-start"
         ),
         OemEntry(
             "Vivo (FuntouchOS)",
@@ -56,23 +67,29 @@ object OemBackgroundHelper {
             listOf(
                 "com.vivo.permissionmanager" to "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
                 "com.iqoo.secure" to "com.iqoo.secure.ui.phoneoptimize.AddWhiteListActivity"
-            )
+            ),
+            screenLabel = "Auto Start"
         ),
         OemEntry(
             "OnePlus (OxygenOS)",
             listOf("oneplus"),
             listOf(
                 "com.oneplus.security" to "com.oneplus.security.chainlaunch.view.ChainLaunchAppListActivity"
-            )
+            ),
+            screenLabel = "Auto-launch"
         ),
         OemEntry(
             "Huawei/Honor (EMUI)",
             listOf("huawei", "honor"),
             listOf(
                 "com.huawei.systemmanager" to "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity"
-            )
+            ),
+            screenLabel = "App launch"
         )
     )
+
+    /** The name THIS ROM uses for its background-launch whitelist, for use in UI copy. */
+    fun getAutostartScreenLabel(): String = currentOem()?.screenLabel ?: "Autostart"
 
     private fun resolves(context: Context, intent: Intent): Boolean =
         context.packageManager.resolveActivity(intent, 0) != null

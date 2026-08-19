@@ -452,21 +452,38 @@ class VolumeReceiver : BroadcastReceiver() {
                 val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as android.app.NotificationManager
                 currentFilter = notificationManager.currentInterruptionFilter
             }
-            
+
+            val ringerMode = audioManager.ringerMode
+            var ring = audioManager.getStreamVolume(AudioManager.STREAM_RING)
+            var notification = audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION)
+            val media = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+            val alarm = audioManager.getStreamVolume(AudioManager.STREAM_ALARM)
+
+            // A snapshot must never be able to silence the phone forever. "Ringer says NORMAL but the
+            // ring stream is at zero / muted" is not a state a user can reach with the volume keys -
+            // it is exactly the zen-free silence WE apply. If we see it here (process was killed and
+            // restarted mid-schedule, so wasEnforcing was lost), the snapshot is our own enforcement
+            // leaking in, and restoring it later would leave the user deaf. Fall back to a sane level.
+            val ringLooksEnforced = ringerMode == AudioManager.RINGER_MODE_NORMAL &&
+                    (ring == 0 || (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M &&
+                            audioManager.isStreamMute(AudioManager.STREAM_RING)))
+            if (ringLooksEnforced) {
+                ring = (audioManager.getStreamMaxVolume(AudioManager.STREAM_RING) * 0.7).toInt().coerceAtLeast(1)
+                notification = (audioManager.getStreamMaxVolume(AudioManager.STREAM_NOTIFICATION) * 0.7).toInt().coerceAtLeast(1)
+                Log.w(TAG, "Snapshot looked like our own enforced silence; saving audible ring=$ring instead")
+            }
+
             prefs.edit()
-                .putInt(KEY_SAVED_RINGER_MODE, audioManager.ringerMode)
-                .putInt(KEY_SAVED_RING_VOLUME, audioManager.getStreamVolume(AudioManager.STREAM_RING))
-                .putInt(KEY_SAVED_MEDIA_VOLUME, audioManager.getStreamVolume(AudioManager.STREAM_MUSIC))
-                .putInt(KEY_SAVED_ALARM_VOLUME, audioManager.getStreamVolume(AudioManager.STREAM_ALARM))
-                .putInt("saved_notification_volume", audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION))
+                .putInt(KEY_SAVED_RINGER_MODE, ringerMode)
+                .putInt(KEY_SAVED_RING_VOLUME, ring)
+                .putInt(KEY_SAVED_MEDIA_VOLUME, media)
+                .putInt(KEY_SAVED_ALARM_VOLUME, alarm)
+                .putInt("saved_notification_volume", notification)
                 .putInt("saved_dnd_filter", currentFilter)
                 .putBoolean(KEY_HAS_SAVED_STATE, true)
                 .commit()  // commit() for synchronous write
-            Log.d(TAG, "Saved current volumes: ring=${audioManager.getStreamVolume(AudioManager.STREAM_RING)}, " +
-                    "media=${audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)}, " +
-                    "alarm=${audioManager.getStreamVolume(AudioManager.STREAM_ALARM)}, " +
-                    "notification=${audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION)}, " +
-                    "ringerMode=${audioManager.ringerMode}, dndFilter=$currentFilter")
+            Log.d(TAG, "Saved current volumes: ring=$ring, media=$media, alarm=$alarm, " +
+                    "notification=$notification, ringerMode=$ringerMode, dndFilter=$currentFilter")
         }
 
         fun restoreSavedVolumes(context: Context, audioManager: AudioManager) {
@@ -546,6 +563,20 @@ class VolumeReceiver : BroadcastReceiver() {
                         audioManager.setStreamVolume(AudioManager.STREAM_ALARM, actualAlarmVol, 0)
                     } catch (e: Exception) {
                         Log.e(TAG, "Failed to restore volumes", e)
+                    }
+
+                    // Unmute AGAIN, after the writes. setStreamVolume(stream, 0) re-arms the mute flag
+                    // on most ROMs, so a user whose media volume was genuinely 0 would be handed back a
+                    // *muted* stream - volume keys then have to fight the flag before sound returns.
+                    // Index 0 is the user's choice; the mute flag is ours, and it must not survive.
+                    try {
+                        audioManager.adjustStreamVolume(AudioManager.STREAM_RING, AudioManager.ADJUST_UNMUTE, 0)
+                        audioManager.adjustStreamVolume(AudioManager.STREAM_NOTIFICATION, AudioManager.ADJUST_UNMUTE, 0)
+                        audioManager.adjustStreamVolume(AudioManager.STREAM_SYSTEM, AudioManager.ADJUST_UNMUTE, 0)
+                        audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
+                        audioManager.adjustStreamVolume(AudioManager.STREAM_ALARM, AudioManager.ADJUST_UNMUTE, 0)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to clear mute flags after restore", e)
                     }
 
                     android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({

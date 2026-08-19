@@ -23,11 +23,13 @@ import com.example.aquiethours.data.Profile
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import java.util.Calendar
 
 class MainService : Service() {
@@ -36,6 +38,16 @@ class MainService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
     private var wasEnforcing = false
     private var lastEnforcedProfileId = -1
+
+    /**
+     * Restore is not atomic: it writes ringer mode, DND filter and four stream volumes, and every
+     * one of those writes echoes back as a VOLUME_CHANGED broadcast / ContentObserver callback.
+     * Those callbacks land in enforceProfileNow(), see the volumes climbing away from the profile,
+     * and re-apply the mute -- which fires more callbacks. The loop sustains itself and the last
+     * re-apply wins, leaving the phone silent after the schedule ended. Volatile because the
+     * observer callbacks arrive on the main thread while restore runs on serviceScope.
+     */
+    @Volatile private var suppressEnforcementUntil = 0L
     private var checkerJob: Job? = null
     private var enforcerJob: Job? = null
     @Volatile private var cachedProfile: Profile? = null
@@ -248,7 +260,11 @@ class MainService : Service() {
                 wasEnforcing = true
                 lastEnforcedProfileId = currentlyActiveProfileId
                 saveEnforcementState()
-                
+
+                // A back-to-back schedule can start inside the previous one's restore window;
+                // don't let a stale deaf window swallow the new schedule's first apply.
+                suppressEnforcementUntil = 0L
+
                 registerObservers()
                 enforceProfileNow("NewSchedule")
             } else {
@@ -261,14 +277,40 @@ class MainService : Service() {
         } else {
             if (wasEnforcing) {
                 Log.d(TAG, "[$source] No active schedules. Restoring volumes.")
-                
-                unregisterObservers()
-                
-                VolumeReceiver.restoreSavedVolumes(applicationContext, audioManager)
-                
-                wasEnforcing = false
-                lastEnforcedProfileId = -1
-                saveEnforcementState()
+
+                // NonCancellable is load-bearing, not defensive. The END alarm fires at the same
+                // second this sweep notices the schedule is over, and the alarm's
+                // startForegroundService() -> onStartCommand() restarts the checker/enforcer
+                // loops, cancelling this very coroutine. That killed the restore *after* the
+                // state teardown below had already persisted wasEnforcing=false, so the
+                // relaunched service saw "nothing to restore" and the phone stayed muted
+                // forever. Once we have decided to restore, the restore must complete.
+                withContext(NonCancellable) {
+                    unregisterObservers()
+
+                    // Tear the enforcement state down BEFORE restoring, never after. Restore
+                    // takes ~100ms+ and emits a volume-change event per stream it touches; any
+                    // of those that were already queued still run enforceProfileNow(), and with
+                    // the old ordering they still saw wasEnforcing==true and re-muted everything
+                    // we had just restored. Clearing first makes them all hit the guard.
+                    wasEnforcing = false
+                    lastEnforcedProfileId = -1
+                    cachedProfile = null
+                    saveEnforcementState()
+
+                    // unregisterObservers() cannot recall callbacks already dispatched to the
+                    // main looper, and the manifest volume receiver is still live, so also hold
+                    // a short deaf window over the restore itself.
+                    suppressEnforcementUntil = System.currentTimeMillis() + RESTORE_SUPPRESSION_MS
+
+                    // Serialise against enforceProfileNow(). Without this an enforcer already
+                    // blocked on applyMutex resumes mid-restore and interleaves its mute writes
+                    // with our unmute writes, which is how the phone ended up silent after the
+                    // schedule had already ended.
+                    applyMutex.withLock {
+                        VolumeReceiver.restoreSavedVolumes(applicationContext, audioManager)
+                    }
+                }
             }
         }
     }
@@ -280,7 +322,9 @@ class MainService : Service() {
      * so it stays cheap; the expensive re-apply only runs when an actual deviation is found.
      */
     private fun startEnforcementLoop() {
-        enforcerJob?.cancel()
+        // Never restart a healthy loop. onStartCommand runs on every alarm/broadcast, and a
+        // cancel-then-relaunch there tears down whatever the old job was in the middle of.
+        if (enforcerJob?.isActive == true) return
         enforcerJob = serviceScope.launch {
             while (isActive) {
                 if (wasEnforcing) {
@@ -298,7 +342,9 @@ class MainService : Service() {
     }
 
     private fun startScheduleChecker() {
-        checkerJob?.cancel()
+        // Same reason as startEnforcementLoop(): the END alarm arriving mid-sweep used to
+        // cancel this job while it was restoring volumes.
+        if (checkerJob?.isActive == true) return
         checkerJob = serviceScope.launch {
             while (isActive) {
                 try {
@@ -315,7 +361,14 @@ class MainService : Service() {
 
     private suspend fun enforceProfileNow(source: String) {
         if (!wasEnforcing || lastEnforcedProfileId == -1) return
-        
+
+        // Our own restore is writing volumes right now; every write echoes back here. Applying
+        // the profile again would undo the restore and re-trigger itself indefinitely.
+        if (System.currentTimeMillis() < suppressEnforcementUntil) {
+            Log.d(TAG, "[$source] Restore in progress, skipping enforcement.")
+            return
+        }
+
         // Must NOT call updateEnforcementState() here: this method is itself invoked from
         // inside that function while it holds stateMutex, and kotlinx Mutex is not reentrant —
         // re-entering suspends forever, permanently freezing the checker loop and all
@@ -335,8 +388,15 @@ class MainService : Service() {
 
         if (shouldReapplyProfile(profile, audioManager)) {
             applyMutex.withLock {
+                // Re-check AFTER winning the lock. The checks above ran before we suspended;
+                // a restore can have started and finished while we waited here, and applying
+                // now would silently re-mute the phone the instant the schedule ended.
+                if (!wasEnforcing || System.currentTimeMillis() < suppressEnforcementUntil) {
+                    Log.d(TAG, "[$source] Enforcement ended while queued, standing down.")
+                    return
+                }
                 if (!shouldReapplyProfile(profile, audioManager)) return
-                
+
                 Log.d(TAG, "[$source] Deviation detected. Applying profile ${profile.name}.")
                 VolumeReceiver.applyProfileSafely(
                     applicationContext, audioManager,
@@ -344,7 +404,10 @@ class MainService : Service() {
                 )
                 
                 delay(100)
-                
+
+                // Same reason as above: the 100ms nap is long enough for the END alarm to land.
+                if (!wasEnforcing || System.currentTimeMillis() < suppressEnforcementUntil) return
+
                 if (shouldReapplyProfile(profile, audioManager)) {
                     Log.w(TAG, "[$source] Retry apply...")
                     VolumeReceiver.applyProfileSafely(
@@ -504,5 +567,12 @@ class MainService : Service() {
         private const val ENFORCEMENT_PREFS = "main_service_enforcement"
         private const val KEY_WAS_ENFORCING = "was_enforcing"
         private const val KEY_LAST_PROFILE_ID = "last_enforced_profile_id"
+
+        /**
+         * How long to ignore volume events after a restore begins. Restore itself sleeps 100ms
+         * for the DND exit and then writes 4 streams; the observed re-mute storm ran ~10s. Kept
+         * short so a genuine user volume change right after a schedule ends is still respected.
+         */
+        private const val RESTORE_SUPPRESSION_MS = 3000L
     }
 }
