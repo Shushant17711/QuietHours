@@ -36,8 +36,17 @@ class MainService : Service() {
 
     private val serviceJob = Job()
     private val serviceScope = CoroutineScope(Dispatchers.IO + serviceJob)
-    private var wasEnforcing = false
-    private var lastEnforcedProfileId = -1
+
+    // Volatile for the same reason as suppressEnforcementUntil/cachedProfile below: written inside
+    // updateEnforcementState() (stateMutex, one IO worker thread) but read from startEnforcementLoop()'s
+    // poll and enforceProfileNow()'s early-return checks, which run on other IO worker threads via
+    // observer/broadcast callbacks. Without a memory barrier a stale wasEnforcing=true can keep being
+    // observed on a different thread after restoreSavedVolumes() already flipped it to false, so the
+    // fast poll keeps re-applying the (now stale) profile right after a restore -- the phone never
+    // audibly un-mutes even though the state machine thinks it did. Back-to-back/continuous schedules
+    // hit this far more often simply because they cause many more state transitions per hour.
+    @Volatile private var wasEnforcing = false
+    @Volatile private var lastEnforcedProfileId = -1
 
     /**
      * Restore is not atomic: it writes ringer mode, DND filter and four stream volumes, and every
