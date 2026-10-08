@@ -217,7 +217,9 @@ class VolumeReceiver : BroadcastReceiver() {
             ringerMode: Int,
             ringVolumePercent: Int,
             mediaVolumePercent: Int,
-            alarmVolumePercent: Int
+            alarmVolumePercent: Int,
+            /** False while the user has deliberately changed media volume in another app. */
+            applyMedia: Boolean = true
         ) {
             var scaledRing = scaleVolume(audioManager, AudioManager.STREAM_RING, ringVolumePercent)
             if (ringerMode == AudioManager.RINGER_MODE_NORMAL && scaledRing == 0) {
@@ -341,7 +343,7 @@ class VolumeReceiver : BroadcastReceiver() {
             val currentMedia = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
             val isMediaMuted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) audioManager.isStreamMute(AudioManager.STREAM_MUSIC) else currentMedia == 0
             
-            val mediaNeedsChange = if (scaledMedia == 0) {
+            val mediaNeedsChange = applyMedia && if (scaledMedia == 0) {
                 !isMediaMuted || currentMedia > 0
             } else {
                 currentMedia != scaledMedia || isMediaMuted
@@ -370,7 +372,7 @@ class VolumeReceiver : BroadcastReceiver() {
             }
 
             // Media volume
-            try {
+            if (mediaNeedsChange) try {
                 if (scaledMedia > 0) {
                     audioManager.adjustStreamVolume(AudioManager.STREAM_MUSIC, AudioManager.ADJUST_UNMUTE, 0)
                     audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, scaledMedia, 0)

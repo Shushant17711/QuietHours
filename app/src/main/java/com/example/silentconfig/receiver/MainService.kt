@@ -67,6 +67,48 @@ class MainService : Service() {
     private var volumeChangeReceiver: android.content.BroadcastReceiver? = null
     private var volumeObserver: ContentObserver? = null
 
+    /*
+     * User media override. Pressing volume up inside Instagram/YouTube is a deliberate choice,
+     * so while media is playing we leave the media level alone instead of fighting it. Once
+     * playback has been silent for MEDIA_OVERRIDE_GRACE_MS (the user left the video/app) or the
+     * screen turns off, the profile's media level comes back. Ring/alarm are still enforced.
+     */
+    @Volatile private var mediaOverride = false
+    /** Media matched the profile at some point, so a later deviation came from the user. */
+    @Volatile private var mediaWasCompliant = false
+    @Volatile private var lastMusicActiveAt = 0L
+
+    private fun resetMediaOverride(reason: String) {
+        if (mediaOverride) Log.d(TAG, "Media override ended ($reason).")
+        mediaOverride = false
+        mediaWasCompliant = false
+    }
+
+    private fun mediaDeviates(profile: Profile, audioManager: AudioManager): Boolean {
+        val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        val muted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) audioManager.isStreamMute(AudioManager.STREAM_MUSIC) else current == 0
+        val expected = VolumeReceiver.scaleVolume(audioManager, AudioManager.STREAM_MUSIC, profile.mediaVolume)
+        return if (expected == 0) !muted || current > 0 else current != expected || muted
+    }
+
+    /** Updates the override from the current audio state; returns true if media should be left alone. */
+    private fun updateMediaOverride(profile: Profile, audioManager: AudioManager): Boolean {
+        val now = System.currentTimeMillis()
+        val musicActive = audioManager.isMusicActive
+        if (musicActive) lastMusicActiveAt = now
+        val deviates = mediaDeviates(profile, audioManager)
+        if (mediaOverride) {
+            if (!musicActive && now - lastMusicActiveAt > MEDIA_OVERRIDE_GRACE_MS) {
+                resetMediaOverride("playback stopped")
+            }
+        } else if (deviates && musicActive && mediaWasCompliant) {
+            Log.d(TAG, "Media volume changed by the user during playback; leaving it until playback stops.")
+            mediaOverride = true
+        }
+        if (!deviates) mediaWasCompliant = true
+        return mediaOverride
+    }
+
     private fun saveEnforcementState() {
         val prefs = getSharedPreferences(ENFORCEMENT_PREFS, Context.MODE_PRIVATE)
         prefs.edit()
@@ -89,7 +131,12 @@ class MainService : Service() {
         
         screenReceiver = object : android.content.BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                if (intent?.action == Intent.ACTION_SCREEN_ON) {
+                if (intent?.action == Intent.ACTION_SCREEN_OFF) {
+                    if (mediaOverride) {
+                        resetMediaOverride("screen off")
+                        serviceScope.launch { enforceProfileNow("ScreenOff") }
+                    }
+                } else if (intent?.action == Intent.ACTION_SCREEN_ON) {
                     Log.d(TAG, "Screen turned on. Checking schedules instantly to bypass Doze delays.")
                     serviceScope.launch {
                         updateEnforcementState("ScreenOn")
@@ -98,6 +145,7 @@ class MainService : Service() {
             }
         }
         val filter = android.content.IntentFilter(Intent.ACTION_SCREEN_ON)
+        filter.addAction(Intent.ACTION_SCREEN_OFF)
         registerReceiver(screenReceiver, filter)
     }
 
@@ -256,6 +304,8 @@ class MainService : Service() {
                 wasEnforcing = true
                 lastEnforcedProfileId = currentlyActiveProfileId
                 saveEnforcementState()
+                // A new profile always starts by applying its own media level.
+                resetMediaOverride("new profile")
 
                 // A back-to-back schedule can start inside the previous one's restore window;
                 // don't let a stale deaf window swallow the new schedule's first apply.
@@ -382,7 +432,8 @@ class MainService : Service() {
                 .getProfileById(lastEnforcedProfileId)?.also { cachedProfile = it }
             ?: return
 
-        if (shouldReapplyProfile(profile, audioManager)) {
+        val skipMedia = updateMediaOverride(profile, audioManager)
+        if (shouldReapplyProfile(profile, audioManager, skipMedia)) {
             applyMutex.withLock {
                 // Re-check AFTER winning the lock. The checks above ran before we suspended;
                 // a restore can have started and finished while we waited here, and applying
@@ -391,12 +442,13 @@ class MainService : Service() {
                     Log.d(TAG, "[$source] Enforcement ended while queued, standing down.")
                     return
                 }
-                if (!shouldReapplyProfile(profile, audioManager)) return
+                if (!shouldReapplyProfile(profile, audioManager, skipMedia)) return
 
                 Log.d(TAG, "[$source] Deviation detected. Applying profile ${profile.name}.")
                 VolumeReceiver.applyProfileSafely(
                     applicationContext, audioManager,
-                    profile.ringerMode, profile.ringVolume, profile.mediaVolume, profile.silentVolume
+                    profile.ringerMode, profile.ringVolume, profile.mediaVolume, profile.silentVolume,
+                    applyMedia = !skipMedia
                 )
                 
                 delay(100)
@@ -404,11 +456,12 @@ class MainService : Service() {
                 // Same reason as above: the 100ms nap is long enough for the END alarm to land.
                 if (!wasEnforcing || System.currentTimeMillis() < suppressEnforcementUntil) return
 
-                if (shouldReapplyProfile(profile, audioManager)) {
+                if (shouldReapplyProfile(profile, audioManager, skipMedia)) {
                     Log.w(TAG, "[$source] Retry apply...")
                     VolumeReceiver.applyProfileSafely(
                         applicationContext, audioManager,
-                        profile.ringerMode, profile.ringVolume, profile.mediaVolume, profile.silentVolume
+                        profile.ringerMode, profile.ringVolume, profile.mediaVolume, profile.silentVolume,
+                        applyMedia = !skipMedia
                     )
                     delay(100)
                 }
@@ -416,7 +469,7 @@ class MainService : Service() {
         }
     }
 
-    private fun shouldReapplyProfile(profile: Profile, audioManager: AudioManager): Boolean {
+    private fun shouldReapplyProfile(profile: Profile, audioManager: AudioManager, skipMedia: Boolean = false): Boolean {
         val currentRingerMode = audioManager.ringerMode
         val currentRing = audioManager.getStreamVolume(AudioManager.STREAM_RING)
         val currentNotification = audioManager.getStreamVolume(AudioManager.STREAM_NOTIFICATION)
@@ -462,7 +515,7 @@ class MainService : Service() {
         val ringNeedsReapply = if (expectedRing == 0) (!isRingMuted || currentRing > 0) else (currentRing != expectedRing || isRingMuted)
         val notificationNeedsReapply = if (expectedRing == 0) (!isNotificationMuted || currentNotification > 0) else (currentNotification != expectedRing || isNotificationMuted)
         
-        val mediaNeedsReapply = if (expectedMedia == 0) {
+        val mediaNeedsReapply = !skipMedia && if (expectedMedia == 0) {
             !isMediaMuted || currentMedia > 0
         } else {
             currentMedia != expectedMedia || isMediaMuted
@@ -538,6 +591,8 @@ class MainService : Service() {
         private const val CHANNEL_ID = "main_service_channel"
         private const val NOTIFICATION_ID = 2002
         private const val RESTART_REQUEST_CODE = 2001
+        /** Playback must stay stopped this long before the user's media level is reverted. */
+        private const val MEDIA_OVERRIDE_GRACE_MS = 3_000L
         private const val ENFORCEMENT_PREFS = "main_service_enforcement"
         private const val KEY_WAS_ENFORCING = "was_enforcing"
         private const val KEY_LAST_PROFILE_ID = "last_enforced_profile_id"
