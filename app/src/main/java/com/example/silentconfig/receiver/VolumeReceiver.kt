@@ -76,14 +76,9 @@ class VolumeReceiver : BroadcastReceiver() {
                     }
                 }
 
-                try {
-                    val evaluateIntent = Intent(context, MainService::class.java).also {
-                        it.action = MainService.ACTION_EVALUATE_SCHEDULES
-                    }
-                    ContextCompat.startForegroundService(context, evaluateIntent)
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to trigger MainService evaluation", e)
-                }
+                // Hand over to the service; if Android won't let us start it (killed after a
+                // swipe from recents, background-start limits), apply/restore right here.
+                MainService.evaluateWithoutService(context)
 
             } finally {
                 pendingResult.finish()
@@ -95,6 +90,8 @@ class VolumeReceiver : BroadcastReceiver() {
     companion object {
         private const val TAG = "VolumeReceiver"
         private const val PREFS_NAME = "aquiethours_volume_backup"
+        /** Same file; MainService and the UI read the skip_end_<id> flags from it. */
+        const val SKIP_PREFS_NAME = PREFS_NAME
         private const val KEY_SAVED_RINGER_MODE = "saved_ringer_mode"
         private const val KEY_SAVED_RING_VOLUME = "saved_ring_volume"
         private const val KEY_SAVED_MEDIA_VOLUME = "saved_media_volume"

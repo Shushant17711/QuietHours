@@ -1,46 +1,95 @@
 package com.example.aquiethours.ui.screens
+
 import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.PowerManager
 import android.widget.Toast
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Favorite
-import com.example.aquiethours.ui.icons.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.Info
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.example.aquiethours.data.SettingsManager
+import com.example.aquiethours.ui.icons.CheckCircle
+import com.example.aquiethours.ui.icons.Key
+import com.example.aquiethours.ui.icons.KeyboardArrowDown
+import com.example.aquiethours.ui.icons.SmartToy
+import com.example.aquiethours.ui.icons.Visibility
+import com.example.aquiethours.ui.icons.VisibilityOff
+import com.example.aquiethours.ui.icons.Warning
 import com.example.aquiethours.ui.theme.*
 import com.example.aquiethours.util.AiScheduleParser
 import com.example.aquiethours.util.OemBackgroundHelper
 import kotlinx.coroutines.launch
 
-@OptIn(ExperimentalMaterial3Api::class)
+private val availableModels = listOf(
+    "google/gemini-2.5-flash" to "Gemini 2.5 Flash",
+    "google/gemini-2.0-flash-001" to "Gemini 2.0 Flash",
+    "openai/gpt-4o-mini" to "GPT-4o Mini",
+    "anthropic/claude-3.5-sonnet" to "Claude 3.5 Sonnet",
+    "meta-llama/llama-3.1-70b-instruct" to "Llama 3.1 70B"
+)
+
 @Composable
 fun SettingsScreen(
-    onNavigateBack: () -> Unit
+    @Suppress("UNUSED_PARAMETER") onNavigateBack: () -> Unit
 ) {
     val context = LocalContext.current
+    val uriHandler = LocalUriHandler.current
     val settingsManager = remember { SettingsManager.getInstance(context) }
     val scope = rememberCoroutineScope()
 
@@ -49,479 +98,299 @@ fun SettingsScreen(
     var showApiKey by remember { mutableStateOf(false) }
     var isTesting by remember { mutableStateOf(false) }
     var testResult by remember { mutableStateOf<Boolean?>(null) }
-    var showModelDropdown by remember { mutableStateOf(false) }
+    var modelsOpen by remember { mutableStateOf(false) }
 
     val powerManager = remember { context.getSystemService(android.content.Context.POWER_SERVICE) as PowerManager }
-    var isBatteryUnrestricted by remember { mutableStateOf(powerManager.isIgnoringBatteryOptimizations(context.packageName)) }
-    val lifecycleOwner = androidx.compose.ui.platform.LocalLifecycleOwner.current
-    androidx.compose.runtime.DisposableEffect(lifecycleOwner) {
-        val observer = androidx.lifecycle.LifecycleEventObserver { _, event ->
-            if (event == androidx.lifecycle.Lifecycle.Event.ON_RESUME) {
-                isBatteryUnrestricted = powerManager.isIgnoringBatteryOptimizations(context.packageName)
+    var isBatteryUnrestricted by remember { mutableStateOf(runCatching { powerManager.isIgnoringBatteryOptimizations(context.packageName) }.getOrDefault(false)) }
+    val lifecycle = LocalLifecycleOwner.current.lifecycle
+    DisposableEffect(lifecycle) {
+        val obs = LifecycleEventObserver { _, e ->
+            if (e == Lifecycle.Event.ON_RESUME) {
+                isBatteryUnrestricted = runCatching { powerManager.isIgnoringBatteryOptimizations(context.packageName) }.getOrDefault(false)
             }
         }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        lifecycle.addObserver(obs)
+        onDispose { lifecycle.removeObserver(obs) }
     }
 
-    val availableModels = listOf(
-        "google/gemini-2.5-flash" to "Gemini 2.5 Flash",
-        "google/gemini-2.0-flash-001" to "Gemini 2.0 Flash",
-        "openai/gpt-4o-mini" to "GPT-4o Mini",
-        "anthropic/claude-3.5-sonnet" to "Claude 3.5 Sonnet",
-        "meta-llama/llama-3.1-70b-instruct" to "Llama 3.1 70B"
-    )
+    val versionName = remember {
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                context.packageManager.getPackageInfo(context.packageName, android.content.pm.PackageManager.PackageInfoFlags.of(0)).versionName
+            } else {
+                @Suppress("DEPRECATION")
+                context.packageManager.getPackageInfo(context.packageName, 0).versionName
+            }
+        } catch (_: Exception) { null } ?: "1.0"
+    }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = {
-                    Text(
-                        "Settings",
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                },
-                navigationIcon = {
-                    IconButton(onClick = onNavigateBack) {
-                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = SurfaceDark
-                )
-            )
-        },
-        containerColor = SurfaceDark
-    ) { paddingValues ->
+    AuroraBackground(accent = SecondaryLight, secondary = PrimaryLight) {
         Column(
-            modifier = Modifier
+            Modifier
                 .fillMaxSize()
-                .padding(paddingValues)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp)
         ) {
-            Spacer(modifier = Modifier.height(8.dp))
+            QuietHeader(title = "Settings", subtitle = "Quiet Hours v$versionName")
 
-            // Background Reliability section — schedules silently stop working on many phones
-            // (MIUI, XOS/HiOS, ColorOS, FuntouchOS, OxygenOS, EMUI) unless the OS's own
-            // background-execution permissions are granted, separate from app permissions.
-            Text(
-                "Background Reliability",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(modifier = Modifier.height(4.dp))
-            Text(
-                "Schedules need these to keep working without opening the app.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-
-            Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(containerColor = SurfaceContainerDark)
+            Column(
+                Modifier.padding(horizontal = Q.Gutter).padding(bottom = Q.BottomBarSpace + 16.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
-                Column(modifier = Modifier.padding(14.dp)) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            if (isBatteryUnrestricted) Icons.Outlined.CheckCircle else Icons.Outlined.Warning,
-                            contentDescription = null,
-                            tint = if (isBatteryUnrestricted) SecondaryLight else ErrorDark,
-                            modifier = Modifier.size(20.dp)
+                // ---------- Reliability ----------
+                Column(Modifier.enterAnimation(0)) {
+                    SectionLabel("Background reliability")
+                    QuietCard(Modifier.fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(6.dp)) {
+                        StatusRow(
+                            title = "Battery optimisation",
+                            body = if (isBatteryUnrestricted) "Unrestricted, so Android won't pause schedules"
+                                   else "Restricted: Android may delay or skip schedules",
+                            ok = isBatteryUnrestricted,
+                            action = if (isBatteryUnrestricted) null else "Fix",
+                            onAction = { OemBackgroundHelper.openBatteryOptimizationSettings(context) }
                         )
-                        Spacer(modifier = Modifier.width(10.dp))
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                "Battery optimization",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurface
-                            )
-                            Text(
-                                if (isBatteryUnrestricted) "Unrestricted" else "Restricted — schedules may not fire",
-                                style = MaterialTheme.typography.bodySmall,
-                                color = if (isBatteryUnrestricted) SecondaryLight else ErrorDark
-                            )
-                        }
-                        if (!isBatteryUnrestricted) {
-                            TextButton(onClick = { OemBackgroundHelper.openBatteryOptimizationSettings(context) }) {
-                                Text("Disable")
-                            }
-                        }
-                    }
-
-                    if (OemBackgroundHelper.isAggressiveOem()) {
-                        Spacer(modifier = Modifier.height(12.dp))
-                        HorizontalDivider(color = OutlineVariantDark)
-                        Spacer(modifier = Modifier.height(12.dp))
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Icon(
-                                Icons.Outlined.Warning,
-                                contentDescription = null,
-                                tint = ErrorDark,
-                                modifier = Modifier.size(20.dp)
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    "${OemBackgroundHelper.getManufacturerLabel()} ${OemBackgroundHelper.getAutostartScreenLabel()}",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurface
-                                )
-                                Text(
-                                    "Required on this phone or the app gets killed in the background",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                                )
-                            }
-                            TextButton(onClick = {
-                                val opened = OemBackgroundHelper.openAutostartSettings(context)
-                                if (!opened) {
-                                    Toast.makeText(
-                                        context,
-                                        "Open your phone's Security / Phone Manager app and find " +
-                                            "\"${OemBackgroundHelper.getAutostartScreenLabel()}\", then set QuietHours to Allowed.",
-                                        Toast.LENGTH_LONG
-                                    ).show()
+                        if (OemBackgroundHelper.isAggressiveOem()) {
+                            Divider()
+                            StatusRow(
+                                title = "${OemBackgroundHelper.getManufacturerLabel()} ${OemBackgroundHelper.getAutostartScreenLabel()}",
+                                body = "Required on this phone, or the app is killed when swiped from recents",
+                                ok = null,
+                                action = "Open",
+                                onAction = {
+                                    val opened = OemBackgroundHelper.openAutostartSettings(context)
+                                    if (!opened) {
+                                        Toast.makeText(
+                                            context,
+                                            "Open your phone's Security / Phone Manager app and find " +
+                                                "\"${OemBackgroundHelper.getAutostartScreenLabel()}\", then set QuietHours to Allowed.",
+                                            Toast.LENGTH_LONG
+                                        ).show()
+                                    }
                                 }
-                            }) {
-                                Text("Open Settings")
+                            )
+                        }
+                    }
+                    Text(
+                        "Tip: lock Quiet Hours in your recent apps (long-press its card) so a \"clear all\" doesn't stop it.",
+                        color = Q.Muted,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(top = 8.dp, start = 4.dp, end = 4.dp)
+                    )
+                }
+
+                // ---------- AI import ----------
+                Column(Modifier.enterAnimation(1)) {
+                    SectionLabel("AI timetable import")
+                    QuietCard(Modifier.fillMaxWidth()) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconBadge(Icons.Outlined.SmartToy, SecondaryLight)
+                            Spacer(Modifier.width(12.dp))
+                            Column(Modifier.weight(1f)) {
+                                Text("OpenRouter", color = OnSurfaceDark, fontWeight = FontWeight.SemiBold)
+                                Text("Reads timetable photos and PDFs into classes", color = Q.Muted, style = MaterialTheme.typography.bodySmall)
                             }
                         }
-                    }
-                }
-            }
-
-            Spacer(modifier = Modifier.height(28.dp))
-
-            // AI Setup Section Header
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(vertical = 8.dp)
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(36.dp)
-                        .clip(RoundedCornerShape(10.dp))
-                        .background(
-                            Brush.linearGradient(
-                                colors = listOf(PrimaryDark, GradientEnd)
-                            )
-                        ),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(
-                        Icons.Outlined.SmartToy,
-                        contentDescription = null,
-                        tint = Color.White,
-                        modifier = Modifier.size(20.dp)
-                    )
-                }
-                Spacer(modifier = Modifier.width(12.dp))
-                Column {
-                    Text(
-                        "AI Setup",
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onSurface
-                    )
-                    Text(
-                        "Configure OpenRouter for timetable import",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(16.dp))
-
-            // Status indicator
-            val isConfigured = apiKey.isNotBlank()
-            Card(
-                shape = RoundedCornerShape(14.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = if (isConfigured)
-                        SecondaryContainer.copy(alpha = 0.4f)
-                    else
-                        ErrorContainerDark.copy(alpha = 0.5f)
-                )
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(14.dp),
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Icon(
-                        if (isConfigured) Icons.Outlined.CheckCircle else Icons.Outlined.Warning,
-                        contentDescription = null,
-                        tint = if (isConfigured) SecondaryLight else ErrorDark,
-                        modifier = Modifier.size(20.dp)
-                    )
-                    Spacer(modifier = Modifier.width(10.dp))
-                    Text(
-                        if (isConfigured) "API key configured" else "API key not set",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = if (isConfigured) SecondaryLight else ErrorDark
-                    )
-                }
-            }
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // API Key input
-            Text(
-                "OpenRouter API Key",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedTextField(
-                value = apiKey,
-                onValueChange = {
-                    apiKey = it
-                    settingsManager.setApiKey(it)
-                    testResult = null
-                },
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(12.dp),
-                singleLine = true,
-                placeholder = { Text("sk-or-...") },
-                leadingIcon = {
-                    Icon(
-                        Icons.Outlined.Key,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
-                },
-                trailingIcon = {
-                    IconButton(onClick = { showApiKey = !showApiKey }) {
-                        Icon(
-                            if (showApiKey) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = if (showApiKey) "Hide" else "Show",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant
-                        )
-                    }
-                },
-                visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    unfocusedBorderColor = OutlineDark,
-                    focusedBorderColor = PrimaryDark,
-                    cursorColor = PrimaryLight,
-                    unfocusedContainerColor = SurfaceContainerDark,
-                    focusedContainerColor = SurfaceContainerDark
-                )
-            )
-
-            Spacer(modifier = Modifier.height(20.dp))
-
-            // Model selector
-            Text(
-                "AI Model",
-                style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-
-            Box {
-                OutlinedTextField(
-                    value = availableModels.find { it.first == selectedModel }?.second ?: selectedModel,
-                    onValueChange = {},
-                    readOnly = true,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable { showModelDropdown = true },
-                    shape = RoundedCornerShape(12.dp),
-                    singleLine = true,
-                    trailingIcon = {
-                        IconButton(onClick = { showModelDropdown = true }) {
-                            Icon(
-                                Icons.Default.KeyboardArrowDown,
-                                contentDescription = "Select model"
-                            )
-                        }
-                    },
-                    colors = OutlinedTextFieldDefaults.colors(
-                        unfocusedBorderColor = OutlineDark,
-                        focusedBorderColor = PrimaryDark,
-                        disabledBorderColor = OutlineDark,
-                        disabledTextColor = MaterialTheme.colorScheme.onSurface,
-                        unfocusedContainerColor = SurfaceContainerDark,
-                        focusedContainerColor = SurfaceContainerDark,
-                        disabledContainerColor = SurfaceContainerDark
-                    ),
-                    enabled = false
-                )
-
-                DropdownMenu(
-                    expanded = showModelDropdown,
-                    onDismissRequest = { showModelDropdown = false },
-                    modifier = Modifier.background(SurfaceContainerHighDark)
-                ) {
-                    availableModels.forEach { (modelId, displayName) ->
-                        DropdownMenuItem(
-                            text = {
-                                Column {
-                                    Text(
-                                        displayName,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = if (modelId == selectedModel) PrimaryLight
-                                        else MaterialTheme.colorScheme.onSurface
-                                    )
-                                    Text(
-                                        modelId,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                        Spacer(Modifier.height(16.dp))
+                        OutlinedTextField(
+                            value = apiKey,
+                            onValueChange = {
+                                apiKey = it
+                                settingsManager.setApiKey(it.trim())
+                                testResult = null
+                            },
+                            label = { Text("API key") },
+                            placeholder = { Text("sk-or-...") },
+                            leadingIcon = { Icon(Icons.Outlined.Key, null, tint = Q.Muted) },
+                            trailingIcon = {
+                                IconButton(onClick = { showApiKey = !showApiKey }) {
+                                    Icon(
+                                        if (showApiKey) Icons.Filled.VisibilityOff else Icons.Filled.Visibility,
+                                        if (showApiKey) "Hide key" else "Show key",
+                                        tint = Q.Muted
                                     )
                                 }
                             },
-                            onClick = {
-                                selectedModel = modelId
-                                settingsManager.setModel(modelId)
-                                showModelDropdown = false
-                            }
+                            visualTransformation = if (showApiKey) VisualTransformation.None else PasswordVisualTransformation(),
+                            singleLine = true,
+                            shape = RoundedCornerShape(Q.ControlRadius),
+                            colors = quietFieldColors(),
+                            modifier = Modifier.fillMaxWidth()
                         )
-                    }
-                }
-            }
+                        Spacer(Modifier.height(12.dp))
 
-            Spacer(modifier = Modifier.height(24.dp))
+                        // Model picker: collapsible list with animated selection.
+                        val modelName = availableModels.firstOrNull { it.first == selectedModel }?.second ?: selectedModel
+                        val rot by animateFloatAsState(if (modelsOpen) 180f else 0f, tween(Motion.MEDIUM), label = "mrot")
+                        Row(
+                            Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(Q.ControlRadius))
+                                .background(Color.White.copy(alpha = 0.04f))
+                                .border(1.dp, Color.White.copy(alpha = 0.1f), RoundedCornerShape(Q.ControlRadius))
+                                .clickable { modelsOpen = !modelsOpen }
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Model", color = Q.Muted, style = MaterialTheme.typography.labelMedium)
+                                Text(modelName, color = OnSurfaceDark, fontWeight = FontWeight.SemiBold)
+                            }
+                            Icon(Icons.Filled.KeyboardArrowDown, null, tint = Q.Muted, modifier = Modifier.graphicsLayer { rotationZ = rot })
+                        }
+                        AnimatedVisibility(modelsOpen, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                            Column(Modifier.padding(top = 6.dp)) {
+                                availableModels.forEach { (id, name) ->
+                                    val sel = id == selectedModel
+                                    val c by animateColorAsState(if (sel) PrimaryLight else OnSurfaceDark, tween(Motion.SHORT), label = "mc")
+                                    Row(
+                                        Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(12.dp))
+                                            .clickable {
+                                                selectedModel = id
+                                                settingsManager.setModel(id)
+                                                testResult = null
+                                                modelsOpen = false
+                                            }
+                                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(name, color = c, fontWeight = if (sel) FontWeight.Bold else FontWeight.Normal, modifier = Modifier.weight(1f))
+                                        PopIn(sel) { Icon(Icons.Outlined.CheckCircle, null, tint = PrimaryLight, modifier = Modifier.size(20.dp)) }
+                                    }
+                                }
+                            }
+                        }
 
-            // Test Connection button
-            Button(
-                onClick = {
-                    if (apiKey.isNotBlank()) {
-                        isTesting = true
-                        testResult = null
-                        scope.launch {
-                            testResult = AiScheduleParser.testConnection(apiKey, selectedModel)
-                            isTesting = false
+                        Spacer(Modifier.height(16.dp))
+                        PrimaryButton(
+                            text = if (isTesting) "Testing…" else "Test connection",
+                            loading = isTesting,
+                            enabled = apiKey.isNotBlank(),
+                            onClick = {
+                                isTesting = true
+                                testResult = null
+                                scope.launch {
+                                    testResult = AiScheduleParser.testConnection(apiKey.trim(), selectedModel)
+                                    isTesting = false
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        AnimatedVisibility(testResult != null, enter = expandVertically() + fadeIn(), exit = shrinkVertically() + fadeOut()) {
+                            val ok = testResult == true
+                            Row(Modifier.padding(top = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                                Chip(
+                                    if (ok) "Connected, AI import is ready" else "Couldn't connect. Check your key",
+                                    if (ok) PrimaryLight else ErrorDark,
+                                    icon = if (ok) Icons.Outlined.CheckCircle else Icons.Outlined.Warning
+                                )
+                            }
                         }
                     }
-                },
-                modifier = Modifier.fillMaxWidth().height(48.dp),
-                enabled = apiKey.isNotBlank() && !isTesting,
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(
-                    containerColor = SurfaceContainerHighDark,
-                    contentColor = PrimaryLight,
-                    disabledContainerColor = SurfaceContainerDark
-                )
-            ) {
-                if (isTesting) {
-                    CircularProgressIndicator(
-                        modifier = Modifier.size(20.dp),
-                        color = PrimaryLight,
-                        strokeWidth = 2.dp
-                    )
-                    Spacer(modifier = Modifier.width(8.dp))
-                    Text("Testing...")
-                } else {
-                    Text("Test Connection", fontWeight = FontWeight.SemiBold)
                 }
-            }
 
-            // Test result
-            testResult?.let { success ->
-                Spacer(modifier = Modifier.height(12.dp))
-                Card(
-                    shape = RoundedCornerShape(12.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (success)
-                            SecondaryContainer.copy(alpha = 0.4f)
-                        else
-                            ErrorContainerDark.copy(alpha = 0.5f)
-                    )
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Icon(
-                            if (success) Icons.Outlined.CheckCircle else Icons.Outlined.Warning,
-                            contentDescription = null,
-                            tint = if (success) SecondaryLight else ErrorDark,
-                            modifier = Modifier.size(18.dp)
-                        )
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            if (success) "Connection successful! AI is ready." else "Connection failed. Check your API key.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = if (success) SecondaryLight else ErrorDark
+                // ---------- Support ----------
+                Column(Modifier.enterAnimation(2)) {
+                    SectionLabel("Support the developer")
+                    QuietCard(Modifier.fillMaxWidth(), accent = DaySun) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconBadge(Icons.Filled.Favorite, DaySun)
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                "If Quiet Hours saved you from an embarrassing ringtone in class, consider a small tip.",
+                                color = Q.Muted,
+                                style = MaterialTheme.typography.bodyMedium,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                        Spacer(Modifier.height(14.dp))
+                        PrimaryButton(
+                            text = "Support via UPI",
+                            icon = Icons.Filled.Favorite,
+                            colors = listOf(DaySun, Color(0xFFFF9F7A)),
+                            onClick = {
+                                val upiUri = Uri.parse("upi://pay?pa=6239876635@ptyes&pn=QuietHours%20Developer&cu=INR")
+                                try {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, upiUri))
+                                } catch (e: ActivityNotFoundException) {
+                                    Toast.makeText(context, "No UPI app found on your phone!", Toast.LENGTH_SHORT).show()
+                                }
+                            },
+                            modifier = Modifier.fillMaxWidth()
                         )
                     }
                 }
-            }
 
-            Spacer(modifier = Modifier.height(32.dp))
-
-            // About section
-            HorizontalDivider(color = OutlineVariantDark)
-            Spacer(modifier = Modifier.height(16.dp))
-
-            Text(
-                "About",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                "AQuietHours v1.0",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Text(
-                "Automatic volume management based on your class schedule",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            
-            Spacer(modifier = Modifier.height(24.dp))
-            
-            HorizontalDivider(color = OutlineVariantDark)
-            Spacer(modifier = Modifier.height(16.dp))
-            
-            Text(
-                "Support Developer",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(modifier = Modifier.height(8.dp))
-            Text(
-                "If this app saved you from an embarrassing ringtone during class, consider supporting development!",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            
-            Button(
-                onClick = {
-                    val upiUri = Uri.parse("upi://pay?pa=6239876635@ptyes&pn=QuietHours%20Developer&cu=INR")
-                    val intent = Intent(Intent.ACTION_VIEW, upiUri)
-                    try {
-                        context.startActivity(intent)
-                    } catch (e: ActivityNotFoundException) {
-                        Toast.makeText(context, "No UPI app found on your phone!", Toast.LENGTH_SHORT).show()
+                // ---------- About ----------
+                Column(Modifier.enterAnimation(3)) {
+                    SectionLabel("About")
+                    QuietCard(Modifier.fillMaxWidth(), contentPadding = androidx.compose.foundation.layout.PaddingValues(6.dp)) {
+                        LinkRow(Icons.Filled.Info, "Terms and conditions") {
+                            uriHandler.openUri("https://github.com/Shushant17711/QuietHours/blob/main/TERMS_AND_CONDITIONS.md")
+                        }
+                        Divider()
+                        LinkRow(Icons.Filled.Info, "Privacy policy") {
+                            uriHandler.openUri("https://github.com/Shushant17711/QuietHours/blob/main/PRIVACY_POLICY.md")
+                        }
+                        Divider()
+                        LinkRow(Icons.Filled.Info, "Source code on GitHub") {
+                            uriHandler.openUri("https://github.com/Shushant17711/QuietHours")
+                        }
                     }
-                },
-                modifier = Modifier.fillMaxWidth().height(50.dp),
-                shape = RoundedCornerShape(12.dp),
-                colors = ButtonDefaults.buttonColors(containerColor = PrimaryDark)
-            ) {
-                Icon(Icons.Filled.Favorite, contentDescription = null, modifier = Modifier.size(18.dp))
-                Spacer(modifier = Modifier.width(8.dp))
-                Text("Support via UPI", fontWeight = FontWeight.Bold)
+                }
             }
-
-            Spacer(modifier = Modifier.height(24.dp))
         }
+    }
+}
+
+@Composable
+private fun Divider() {
+    Box(Modifier.padding(horizontal = 14.dp).fillMaxWidth().height(1.dp).background(Color.White.copy(alpha = 0.06f)))
+}
+
+/** [ok]: true = green check, false = amber warning, null = neutral info. */
+@Composable
+private fun StatusRow(title: String, body: String, ok: Boolean?, action: String?, onAction: () -> Unit) {
+    val color = when (ok) { true -> PrimaryLight; false -> TertiaryLight; null -> SecondaryLight }
+    Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Box(Modifier.size(10.dp).clip(CircleShape).background(color))
+        Spacer(Modifier.width(14.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, color = OnSurfaceDark, fontWeight = FontWeight.SemiBold, style = MaterialTheme.typography.titleSmall)
+            Text(body, color = Q.Muted, style = MaterialTheme.typography.bodySmall)
+        }
+        if (action != null) {
+            Spacer(Modifier.width(8.dp))
+            Text(
+                action,
+                color = color,
+                fontWeight = FontWeight.Bold,
+                style = MaterialTheme.typography.labelLarge,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(50))
+                    .background(color.copy(alpha = 0.14f))
+                    .clickable(onClick = onAction)
+                    .padding(horizontal = 14.dp, vertical = 7.dp)
+            )
+        } else if (ok == true) {
+            Icon(Icons.Outlined.CheckCircle, null, tint = PrimaryLight, modifier = Modifier.size(22.dp))
+        }
+    }
+}
+
+@Composable
+private fun LinkRow(icon: ImageVector, text: String, onClick: () -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(14.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(icon, null, tint = Q.Muted, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(14.dp))
+        Text(text, color = OnSurfaceDark, modifier = Modifier.weight(1f))
+        Icon(Icons.AutoMirrored.Filled.ArrowForward, null, tint = Q.Muted, modifier = Modifier.size(18.dp))
     }
 }

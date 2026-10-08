@@ -167,16 +167,20 @@ Example output:
                     continue
                 }
 
-                entries.add(
-                    ParsedScheduleEntry(
-                        day = day,
-                        startHour = obj.getInt("startHour").coerceIn(0, 23),
-                        startMinute = obj.getInt("startMinute").coerceIn(0, 59),
-                        endHour = obj.getInt("endHour").coerceIn(0, 23),
-                        endMinute = obj.getInt("endMinute").coerceIn(0, 59),
-                        label = obj.optString("label", "Class")
-                    )
+                val entry = ParsedScheduleEntry(
+                    day = day,
+                    startHour = obj.getInt("startHour").coerceIn(0, 23),
+                    startMinute = obj.getInt("startMinute").coerceIn(0, 59),
+                    endHour = obj.getInt("endHour").coerceIn(0, 23),
+                    endMinute = obj.getInt("endMinute").coerceIn(0, 59),
+                    label = obj.optString("label", "Class")
                 )
+                // start == end is treated as a 24h window downstream (mutes all day).
+                if (entry.startHour == entry.endHour && entry.startMinute == entry.endMinute) {
+                    Log.w(TAG, "Skipping zero-length entry at index $i")
+                    continue
+                }
+                entries.add(entry)
             } catch (e: Exception) {
                 Log.w(TAG, "Skipping malformed entry at index $i", e)
             }

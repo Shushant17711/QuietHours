@@ -84,6 +84,7 @@ class MainService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        loadEnforcementState()
         createNotificationChannel()
         
         screenReceiver = object : android.content.BroadcastReceiver() {
@@ -117,7 +118,8 @@ class MainService : Service() {
 
         Log.d(TAG, "MainService started and running in foreground.")
 
-        loadEnforcementState()
+        // Loaded once in onCreate. Re-loading here on every alarm/nudge ran unlocked on
+        // the main thread and could resurrect wasEnforcing=true mid-restore.
 
         if (wasEnforcing) {
             registerObservers()
@@ -147,14 +149,22 @@ class MainService : Service() {
         screenReceiver?.let { unregisterReceiver(it) }
         unregisterObservers()
         
-        if (wasEnforcing) {
-            Log.d(TAG, "Service being destroyed while enforcing. Restoring volumes safely.")
+        val userDisabled = !AppPreferences.getInstance(applicationContext).isGlobalEnabled()
+        if (wasEnforcing && userDisabled) {
+            Log.d(TAG, "App turned off while enforcing. Restoring volumes.")
             val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
             VolumeReceiver.restoreSavedVolumes(applicationContext, audioManager)
-            
+
             wasEnforcing = false
             lastEnforcedProfileId = -1
             saveEnforcementState()
+        } else if (!userDisabled) {
+            // Destroyed by the system / an OEM task killer (swipe from recents on MIUI,
+            // XOS, ColorOS...). Restoring here used to UNMUTE the phone mid-class the
+            // moment the app was swiped away. Keep the persisted state so whoever runs
+            // next (restarted service, alarm, worker) continues it, and ask to be revived.
+            Log.w(TAG, "Destroyed while enabled (wasEnforcing=$wasEnforcing). Keeping state, scheduling revive.")
+            scheduleRevive(applicationContext)
         }
         Log.d(TAG, "MainService destroyed.")
     }
@@ -232,31 +242,8 @@ class MainService : Service() {
     
     private suspend fun updateEnforcementState(source: String) = stateMutex.withLock {
         cachedProfile = null // re-read once per cycle so profile edits take effect
-        val database = AppDatabase.getDatabase(applicationContext)
-        val activeSchedules = database.scheduleDao().getActiveSchedules()
-        val now = Calendar.getInstance()
-        val currentDayOfWeek = VolumeReceiver.calendarDayToJavaDayOfWeek(now.get(Calendar.DAY_OF_WEEK))
-        val currentTimeMins = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
-        
-        var currentlyActiveProfileId: Int? = null
-        
-        for (schedule in activeSchedules) {
-            if (!schedule.isActive) continue
-            
-            val startMins = schedule.startHour * 60 + schedule.startMinute
-            val endMins = schedule.endHour * 60 + schedule.endMinute
-            val previousDayOfWeek = currentDayOfWeek.minus(1)
+        val currentlyActiveProfileId = resolveActiveProfileId(applicationContext)
 
-            val isNormal = schedule.dayOfWeek == currentDayOfWeek && startMins < endMins && currentTimeMins in startMins until endMins
-            val crossesMidnight = schedule.dayOfWeek == currentDayOfWeek && startMins >= endMins && currentTimeMins >= startMins
-            val crossesMidnightYesterday = schedule.dayOfWeek == previousDayOfWeek && startMins >= endMins && currentTimeMins < endMins
-            
-            if (isNormal || crossesMidnight || crossesMidnightYesterday) {
-                currentlyActiveProfileId = schedule.profileId
-                break
-            }
-        }
-        
         val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
 
         if (currentlyActiveProfileId != null) {
@@ -505,30 +492,8 @@ class MainService : Service() {
         super.onTaskRemoved(rootIntent)
         Log.e(TAG, "App was swiped from recents! Trying to revive...")
 
-        val restartIntent = Intent(applicationContext, RestartReceiver::class.java).apply {
-            action = "com.example.aquiethours.RESTART_SERVICE"
-            putExtra("SERVICE_TO_RESTART", "MainService")
-        }
-        val pendingIntent = android.app.PendingIntent.getBroadcast(
-            applicationContext,
-            RESTART_REQUEST_CODE,
-            restartIntent,
-            android.app.PendingIntent.FLAG_ONE_SHOT or android.app.PendingIntent.FLAG_IMMUTABLE
-        )
-        val alarmManager = getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
-        
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            if (alarmManager.canScheduleExactAlarms()) {
-                alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 1000, pendingIntent)
-            } else {
-                alarmManager.setAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 1000, pendingIntent)
-            }
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            alarmManager.setExactAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 1000, pendingIntent)
-        } else {
-            alarmManager.setExact(android.app.AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 1000, pendingIntent)
-        }
-        
+        scheduleRevive(applicationContext)
+
         val broadcastIntent = Intent(applicationContext, RestartReceiver::class.java)
         broadcastIntent.action = "com.example.aquiethours.RESTART_SERVICE"
         sendBroadcast(broadcastIntent)
@@ -583,5 +548,133 @@ class MainService : Service() {
          * short so a genuine user volume change right after a schedule ends is still respected.
          */
         private const val RESTORE_SUPPRESSION_MS = 3000L
+
+        /**
+         * Restore volumes if a previous service instance died while enforcing. Called when
+         * the user turns the app off: a live service restores in onDestroy (and clears the
+         * flag), so this is a no-op then.
+         */
+        /** Serialises fallback evaluations from receivers/worker running concurrently. */
+        private val evalMutex = Mutex()
+
+        /**
+         * Which profile should be active right now, or null. Single source of truth for
+         * the service sweep, the alarm receiver and the worker. Also consumes "skip next"
+         * for a window that has started and clears stale skip flags.
+         */
+        suspend fun resolveActiveProfileId(context: Context): Int? {
+            val database = AppDatabase.getDatabase(context)
+            val skipPrefs = context.getSharedPreferences(VolumeReceiver.SKIP_PREFS_NAME, Context.MODE_PRIVATE)
+            val now = Calendar.getInstance()
+            val today = VolumeReceiver.calendarDayToJavaDayOfWeek(now.get(Calendar.DAY_OF_WEEK))
+            val yesterday = today.minus(1)
+            val nowMins = now.get(Calendar.HOUR_OF_DAY) * 60 + now.get(Calendar.MINUTE)
+
+            var active: Int? = null
+            for (schedule in database.scheduleDao().getActiveSchedules()) {
+                val startMins = schedule.startHour * 60 + schedule.startMinute
+                val endMins = schedule.endHour * 60 + schedule.endMinute
+                val inWindow =
+                    (schedule.dayOfWeek == today && startMins < endMins && nowMins in startMins until endMins) ||
+                    (schedule.dayOfWeek == today && startMins >= endMins && nowMins >= startMins) ||
+                    (schedule.dayOfWeek == yesterday && startMins >= endMins && nowMins < endMins)
+
+                // "Skip next" lives in Schedule.skipNext (next occurrence) and the
+                // skip_end_<id> pref (occurrence running now).
+                val skipKey = "skip_end_${schedule.id}"
+                if (!inWindow) {
+                    // Window over: drop a leftover flag so a lost END alarm can't make
+                    // this class skip itself every week.
+                    if (skipPrefs.contains(skipKey)) skipPrefs.edit().remove(skipKey).commit()
+                    continue
+                }
+                if (schedule.skipNext) {
+                    database.scheduleDao().updateSkipNext(schedule.id, false)
+                    skipPrefs.edit().putBoolean(skipKey, true).commit()
+                }
+                if (skipPrefs.getBoolean(skipKey, false)) continue
+                if (active == null) active = schedule.profileId
+            }
+            return active
+        }
+
+        /**
+         * Make the phone match the timetable even when MainService can't run. Android 12+
+         * refuses to start a foreground service from the background (worker, inexact alarm,
+         * or after an OEM killed us on swipe-from-recents), and the alarms used to depend on
+         * the service entirely, so nothing muted or unmuted until the app was reopened.
+         *
+         * With [startServiceFirst], a successful service start hands the work over to the
+         * service (it re-evaluates in onStartCommand) and this does nothing else.
+         */
+        suspend fun evaluateWithoutService(context: Context, startServiceFirst: Boolean = true) {
+            val app = context.applicationContext
+            if (!AppPreferences.getInstance(app).isGlobalEnabled()) return
+            if (startServiceFirst) {
+                try {
+                    androidx.core.content.ContextCompat.startForegroundService(
+                        app, Intent(app, MainService::class.java).setAction(ACTION_EVALUATE_SCHEDULES)
+                    )
+                    return
+                } catch (e: Exception) {
+                    Log.w(TAG, "Can't start service from background ($e); applying directly.")
+                }
+            }
+            evalMutex.withLock {
+                val prefs = app.getSharedPreferences(ENFORCEMENT_PREFS, Context.MODE_PRIVATE)
+                val audioManager = app.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+                val activeProfileId = resolveActiveProfileId(app)
+                val wasEnforcing = prefs.getBoolean(KEY_WAS_ENFORCING, false)
+                if (activeProfileId != null) {
+                    val profile = AppDatabase.getDatabase(app).profileDao().getProfileById(activeProfileId) ?: return
+                    if (!wasEnforcing) VolumeReceiver.saveCurrentVolumes(app, audioManager)
+                    prefs.edit().putBoolean(KEY_WAS_ENFORCING, true).putInt(KEY_LAST_PROFILE_ID, activeProfileId).commit()
+                    VolumeReceiver.applyProfileSafely(
+                        app, audioManager, profile.ringerMode, profile.ringVolume, profile.mediaVolume, profile.silentVolume
+                    )
+                    Log.d(TAG, "Fallback applied profile ${profile.name}")
+                } else if (wasEnforcing) {
+                    restoreIfStillEnforcing(app)
+                }
+            }
+        }
+
+        /**
+         * Ask to be brought back shortly. setAlarmClock is the one alarm class that app
+         * freezers (Transsion Usf_Hiber, MIUI, ColorOS) can't hold back, and it grants the
+         * exemption needed to start a foreground service from the background.
+         */
+        fun scheduleRevive(context: Context) {
+            val app = context.applicationContext
+            val pi = android.app.PendingIntent.getBroadcast(
+                app, RESTART_REQUEST_CODE,
+                Intent(app, RestartReceiver::class.java).setAction("com.example.aquiethours.RESTART_SERVICE"),
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+            )
+            val am = app.getSystemService(Context.ALARM_SERVICE) as android.app.AlarmManager
+            val at = System.currentTimeMillis() + 3000
+            try {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || am.canScheduleExactAlarms()) {
+                    val show = android.app.PendingIntent.getActivity(
+                        app, 0, Intent(app, com.example.aquiethours.MainActivity::class.java),
+                        android.app.PendingIntent.FLAG_UPDATE_CURRENT or android.app.PendingIntent.FLAG_IMMUTABLE
+                    )
+                    am.setAlarmClock(android.app.AlarmManager.AlarmClockInfo(at, show), pi)
+                } else {
+                    am.setAndAllowWhileIdle(android.app.AlarmManager.RTC_WAKEUP, at, pi)
+                }
+            } catch (e: SecurityException) {
+                Log.e(TAG, "Could not schedule revive", e)
+            }
+        }
+
+        fun restoreIfStillEnforcing(context: Context) {
+            val prefs = context.getSharedPreferences(ENFORCEMENT_PREFS, Context.MODE_PRIVATE)
+            if (!prefs.getBoolean(KEY_WAS_ENFORCING, false)) return
+            Log.d(TAG, "Service was dead while enforcing; restoring volumes directly.")
+            val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+            VolumeReceiver.restoreSavedVolumes(context.applicationContext, audioManager)
+            prefs.edit().putBoolean(KEY_WAS_ENFORCING, false).putInt(KEY_LAST_PROFILE_ID, -1).commit()
+        }
     }
 }

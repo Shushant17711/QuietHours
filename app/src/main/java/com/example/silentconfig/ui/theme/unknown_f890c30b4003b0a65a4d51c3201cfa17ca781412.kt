@@ -2,49 +2,52 @@ package com.example.aquiethours.ui.theme
 
 import androidx.compose.ui.graphics.Color
 
-// Primary palette — vivid blue-violet
-val PrimaryLight = Color(0xFFB388FF)
-val PrimaryDark = Color(0xFF7C4DFF)
-val PrimaryContainer = Color(0xFF2D1B69)
-val OnPrimaryContainer = Color(0xFFE8DEFF)
+// "Night shift" palette — calm slate surfaces, calm blue accent, warm amber highlight.
+// Token names are unchanged so every screen picks the new look up automatically.
 
-// Secondary palette — teal / cyan accent
-val SecondaryLight = Color(0xFF80CBC4)
-val SecondaryDark = Color(0xFF26A69A)
-val SecondaryContainer = Color(0xFF0D3B38)
-val OnSecondaryContainer = Color(0xFFD0F0ED)
+// Primary — calm blue (Light = text/icons on dark, Dark = filled buttons w/ white text)
+val PrimaryLight = Color(0xFF8AB4FF)
+val PrimaryDark = Color(0xFF3A6FD8)
+val PrimaryContainer = Color(0xFF15264A)
+val OnPrimaryContainer = Color(0xFFD8E4FF)
+
+// Secondary — soft sky blue
+val SecondaryLight = Color(0xFFA9B8D0)
+val SecondaryDark = Color(0xFF5A6E8C)
+val SecondaryContainer = Color(0xFF1E2838)
+val OnSecondaryContainer = Color(0xFFDDE5F2)
 
 // Tertiary — warm amber
-val TertiaryLight = Color(0xFFFFD54F)
-val TertiaryDark = Color(0xFFFFC107)
+val TertiaryLight = Color(0xFFFFD08A)
+val TertiaryDark = Color(0xFFF2A93B)
 
-// Surface / Background — deep charcoal
-val SurfaceDark = Color(0xFF0F0F1A)
-val SurfaceContainerDark = Color(0xFF1A1A2E)
-val SurfaceContainerHighDark = Color(0xFF222240)
-val SurfaceVariantDark = Color(0xFF2A2A45)
-val OnSurfaceDark = Color(0xFFE8E8F0)
-val OnSurfaceVariantDark = Color(0xFFB0B0C8)
+// Surfaces — deep blue-slate
+val SurfaceDark = Color(0xFF0B0F14)
+val SurfaceContainerDark = Color(0xFF131A21)
+val SurfaceContainerHighDark = Color(0xFF1B242D)
+val SurfaceVariantDark = Color(0xFF212B35)
+val OnSurfaceDark = Color(0xFFE6EDF3)
+val OnSurfaceVariantDark = Color(0xFF93A1AF)
 
 // Error — warm coral
-val ErrorDark = Color(0xFFFF6B6B)
-val ErrorContainerDark = Color(0xFF3D1818)
-val OnErrorDark = Color(0xFF1A0000)
+val ErrorDark = Color(0xFFFF7A6E)
+val ErrorContainerDark = Color(0xFF3A1714)
+val OnErrorDark = Color(0xFF3A0A06)
 
-// Outline
-val OutlineDark = Color(0xFF3A3A55)
-val OutlineVariantDark = Color(0xFF2A2A40)
+// Outlines
+val OutlineDark = Color(0xFF2C3742)
+val OutlineVariantDark = Color(0xFF1E2730)
 
-// Gradient colors for cards / accents
-val GradientStart = Color(0xFF7C4DFF)
-val GradientEnd = Color(0xFF448AFF)
-val GradientTeal = Color(0xFF26A69A)
+// Gradients
+val GradientStart = Color(0xFF2F5FC4)
+val GradientEnd = Color(0xFF4F8FE0)
+val GradientTeal = Color(0xFF8AB4FF)
 
-// Day-of-week accent colors
-val DayMon = Color(0xFF7C4DFF)
-val DayTue = Color(0xFF448AFF)
-val DayWed = Color(0xFF26A69A)
-val DayThu = Color(0xFFFF7043)
-val DayFri = Color(0xFFAB47BC)
-val DaySat = Color(0xFFFFCA28)
-val DaySun = Color(0xFFEF5350)
+// Day-of-week accents — distinct hues, none purple
+val DayMon = Color(0xFF8AB4FF)
+val DayTue = Color(0xFFB9A6F5)
+val DayWed = Color(0xFFFFD08A)
+val DayThu = Color(0xFFFF9F7A)
+val DayFri = Color(0xFFA8E06A)
+val DaySat = Color(0xFF5FD3F3)
+val DaySun = Color(0xFFFF7A9C)

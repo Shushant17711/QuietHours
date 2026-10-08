@@ -46,15 +46,9 @@ class ScheduleEnforcerWorker(
             Log.d(TAG, "Re-registered ${activeSchedules.size} active schedule alarms as safety net.")
 
             // Ensure MainService is running and evaluates schedules
-            try {
-                val evaluateIntent = Intent(context, MainService::class.java).also {
-                    it.action = MainService.ACTION_EVALUATE_SCHEDULES
-                }
-                ContextCompat.startForegroundService(context, evaluateIntent)
-                Log.d(TAG, "Ensured MainService is running and checking schedules")
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to start MainService from worker", e)
-            }
+            // WorkManager can't start a foreground service on Android 12+, so this
+            // safety net used to do nothing when the service was dead.
+            MainService.evaluateWithoutService(context)
 
             return Result.success()
         } catch (e: Exception) {

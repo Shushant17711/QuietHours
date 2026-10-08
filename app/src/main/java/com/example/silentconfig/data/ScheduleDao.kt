@@ -17,6 +17,9 @@ interface ScheduleDao {
     @Query("SELECT * FROM schedules WHERE dayOfWeek = :day")
     fun getSchedulesForDay(day: DayOfWeek): Flow<List<Schedule>>
 
+    @Query("SELECT * FROM schedules")
+    suspend fun getAllSchedulesOnce(): List<Schedule>
+
     @Query("SELECT * FROM schedules WHERE isActive = 1")
     suspend fun getActiveSchedules(): List<Schedule>
 

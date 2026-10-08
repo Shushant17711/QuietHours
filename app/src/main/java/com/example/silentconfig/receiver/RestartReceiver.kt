@@ -16,17 +16,10 @@ class RestartReceiver : BroadcastReceiver() {
         if (AppPreferences.getInstance(context).isGlobalEnabled()) {
             val serviceToRestart = intent.getStringExtra("SERVICE_TO_RESTART")
             
-            try {
-                val serviceIntent = Intent(context, MainService::class.java)
-                ContextCompat.startForegroundService(context, serviceIntent)
-            } catch (e: Exception) {
-                // In Android 12+, this can throw ForegroundServiceStartNotAllowedException
-                // if the app is in the background. We log it and continue.
-                Log.e("RestartReceiver", "Failed to restart foreground service", e)
-            }
 
             // Crucial: ALWAYS Re-register alarms, even if starting the service failed.
             // Custom ROMs (OxygenOS, MIUI, etc.) often wipe AlarmManager alarms when the app is swiped.
+            val pendingResult = goAsync()
             kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.Dispatchers.IO).launch {
                 try {
                     val database = com.example.aquiethours.data.AppDatabase.getDatabase(context)
@@ -37,8 +30,12 @@ class RestartReceiver : BroadcastReceiver() {
                         scheduler.schedule(schedule, true)
                     }
                     Log.d("RestartReceiver", "Rescheduled ${activeSchedules.size} alarms after restart")
+                    // Restart the service, or apply/restore directly if Android refuses.
+                    MainService.evaluateWithoutService(context)
                 } catch (e: Exception) {
                     Log.e("RestartReceiver", "Error rescheduling alarms", e)
+                } finally {
+                    pendingResult.finish()
                 }
             }
         }
